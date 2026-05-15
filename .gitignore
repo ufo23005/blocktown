@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Claude Code 工作目錄（包含本機設定與素材，不應公開）
+.claude/
+
+# 編輯器設定
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日誌與暫存
+*.log
+npm-debug.log*
+node_modules/
+dist/
+build/
+
+# 環境變數
+.env
+.env.local

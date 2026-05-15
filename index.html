@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>小鎮建築師 — Townscaper 風格</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app"></div>
+<div id="loading">正在產生地圖…</div>
+
+<div id="title">小鎮建築師</div>
+
+<div id="toolbar">
+  <button class="btn" id="btn-undo">↶ 復原</button>
+  <button class="btn" id="btn-clear">🗑 全部清除</button>
+  <button class="btn" id="btn-regen">🎲 重新生成地圖</button>
+</div>
+
+<div id="help">
+  <h3>操作說明</h3>
+  <div>🖱 <b>左鍵點擊</b>：放置方塊</div>
+  <div>🖱 <b>右鍵點擊</b>：移除方塊</div>
+  <div>🖱 <b>左鍵拖曳</b>：旋轉視角</div>
+  <div>🖱 <b>中鍵拖曳</b>：平移</div>
+  <div>🖱 <b>滾輪</b>：縮放</div>
+  <div>⌨ <b>1-9, 0</b>：切換顏色</div>
+  <div>⌨ <b>⌘Z / Ctrl+Z</b>：復原</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "delaunator": "https://esm.sh/delaunator@5.0.1"
+  }
+}
+</script>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
