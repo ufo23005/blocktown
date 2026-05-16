@@ -398,7 +398,17 @@ function generateGrid(radius = 13, seed = Math.random()) {
     const triIds = trianglesAroundPoint(p);
     if (triIds.length < 3) continue;            // 退化：不形成多邊形（理論上不發生）
     const verts = triIds.map(t => triCircum[t]);
-    rawCells.push({ id: rawCells.length, vertIdx: triIds.slice(), verts, blocks: [] });
+    const vIdx = triIds.slice();
+    // 強制 CW 順序（signed area < 0）：下游程式碼（牆面法線、stairs/dormers 內外向、
+    // window/door 外推）皆以 CW 為前提。Delaunator 周遭三角形預設是 CCW 走訪，
+    // 不修正會使所有「outward」其實指向 cell 內部，造成牆面 backface 被剔除。
+    let _sa = 0;
+    for (let _i = 0; _i < verts.length; _i++) {
+      const _j = (_i + 1) % verts.length;
+      _sa += verts[_i][0] * verts[_j][1] - verts[_j][0] * verts[_i][1];
+    }
+    if (_sa > 0) { verts.reverse(); vIdx.reverse(); }
+    rawCells.push({ id: rawCells.length, vertIdx: vIdx, verts, blocks: [] });
   }
   const cells = rawCells;
 
