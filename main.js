@@ -28,6 +28,17 @@ const PALETTE = [
 let currentColor = 1;
 
 const BLOCK_HEIGHT = 1.0;
+// 兩階段建造：第一次點擊 = 矮地基（block[0]），之後 = 正常樓層 + 屋頂
+// 地基為單一物件：從略沉水下到水面上 0.3 處（不需額外 cliffMat 基座）
+const FOUNDATION_TOP_Y = 0.3;              // 地基頂 = 樓層底
+// 注意：FOUNDATION_BOTTOM_Y 引用 WATER_Y，但 WATER_Y 在後面才宣告
+// → 用 getter 形式延後求值
+const getFoundationBottomY = () => WATER_Y - 0.05;
+
+// 樓層底/頂 y 計算（lvl=0 是地基，lvl≥1 是樓層）
+const blockBottomY = (lvl) => lvl <= 0 ? getFoundationBottomY() : FOUNDATION_TOP_Y + (lvl - 1) * BLOCK_HEIGHT;
+const blockTopY = (lvl) => lvl < 0 ? 0 : (lvl === 0 ? FOUNDATION_TOP_Y : FOUNDATION_TOP_Y + lvl * BLOCK_HEIGHT);
+const cellTopY = (cell) => cell.blocks.length === 0 ? 0 : blockTopY(cell.blocks.length - 1);
 
 // ===== 場景初始化 =====
 const app = document.getElementById('app');
@@ -175,7 +186,7 @@ function computeFocusTarget(out) {
     const cx = cell.center[0], cz = cell.center[1];
     for (let lvl = 0; lvl < cell.blocks.length; lvl++) {
       sx += cx;
-      sy += (lvl + 0.5) * BLOCK_HEIGHT;
+      sy += (blockBottomY(lvl) + blockTopY(lvl)) * 0.5;   // block 中心 y（地基/樓層通用）
       sz += cz;
       n++;
     }
@@ -214,51 +225,8 @@ sun.shadow.normalBias = 0.02;
 scene.add(sun);
 
 // ===== 水面（Townscaper 風）=====
-// 島嶼：圓形草地頂 + 微微外擴的崖壁柱身。崖壁下半段沉入水面。
-// 水面：大平面 + 簡易 sin 波 shader。雲影 + 霧讓遠處自然消失於海平面色。
-const WATER_Y = -0.8;          // 水面：建築底正下方一小段
-const FOUNDATION_BOTTOM = -2.0; // 基座底（完全沒入水下，不會被看到）
-const ISLAND_DEPTH = -FOUNDATION_BOTTOM;   // 基座深度 = 2.0，cliff shader 漸層用
-
-// 崖壁/基座材質：給 buildFoundations 用，垂直方向漸層 + 橫向岩紋
-const cliffMat = new THREE.MeshStandardMaterial({
-  color: 0x6f5b48, roughness: 1.0, metalness: 0, flatShading: true,
-});
-cliffMat.onBeforeCompile = (shader) => {
-  shader.vertexShader = shader.vertexShader.replace(
-    '#include <common>',
-    '#include <common>\nvarying vec3 vCliffPos;'
-  ).replace(
-    '#include <worldpos_vertex>',
-    '#include <worldpos_vertex>\nvCliffPos = worldPosition.xyz;'
-  );
-  shader.fragmentShader = shader.fragmentShader.replace(
-    '#include <common>',
-    `#include <common>
-     varying vec3 vCliffPos;
-     float hash21c(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-     float vnc(vec2 p) {
-       vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0 - 2.0*f);
-       float a = hash21c(i), b = hash21c(i + vec2(1,0)), c = hash21c(i + vec2(0,1)), d = hash21c(i + vec2(1,1));
-       return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
-     }`
-  ).replace(
-    '#include <color_fragment>',
-    `#include <color_fragment>
-     // 垂直方向有層次：上方偏綠（剛從草地過渡），中段棕，下段灰
-     float h = clamp((vCliffPos.y + ${ISLAND_DEPTH.toFixed(2)}) / ${ISLAND_DEPTH.toFixed(2)}, 0.0, 1.0);
-     vec3 topTint = vec3(0.72, 0.66, 0.50);
-     vec3 midTint = vec3(0.55, 0.42, 0.30);
-     vec3 botTint = vec3(0.40, 0.36, 0.32);
-     vec3 stratify = mix(botTint, midTint, smoothstep(0.0, 0.55, h));
-     stratify = mix(stratify, topTint, smoothstep(0.55, 1.0, h));
-     diffuseColor.rgb = stratify;
-     // 加 noise：橫向岩紋
-     float n = vnc(vec2(vCliffPos.x * 2.5 + vCliffPos.z * 2.5, vCliffPos.y * 4.0));
-     diffuseColor.rgb *= (0.82 + n * 0.28);`
-  );
-};
-// （島嶼 mesh 已移除，cliffMat 留下來給 buildFoundations 用）
+// 水面只負責顯示海洋；地基由 block[0] 自身延伸至水下完成（無 cliffMat）
+const WATER_Y = -0.8;          // 水面：地基會延伸到此面下方一點點
 
 // 水面：簡易 sin 波 + 邊緣淡色泡沫
 let waterMaterial = null;
@@ -777,9 +745,6 @@ const windowsGroup = new THREE.Group();
 scene.add(windowsGroup);
 const doorsGroup = new THREE.Group();
 scene.add(doorsGroup);
-// 建築水下基座：第一層方塊放下時自動長出
-const foundationsGroup = new THREE.Group();
-scene.add(foundationsGroup);
 
 // 拱形窗戶：Shape 做上半圓 + 下矩形
 function _buildArchedWindowGeom() {
@@ -869,18 +834,19 @@ function buildWindows() {
   for (const cell of cells) {
     if (!cell.blocks.length) continue;
     for (let lvl = 0; lvl < cell.blocks.length; lvl++) {
+      if (lvl === 0) continue;          // 地基（podium）沒有窗
       for (let i = 0; i < cell.vertIdx.length; i++) {
         const nei = cell.neighbors[i];
         if (nei !== null && cells[nei].blocks[lvl]) continue;
-        // 地面層第一面（i==0）幾乎一定會放門 → 第 0 面跳過避免門+窗重疊
-        const isDoorWall = (lvl === 0 && i === 0);
+        // 一樓地面層第一面（i==0）幾乎一定會放門 → 第 0 面跳過避免門+窗重疊
+        const isDoorWall = (lvl === 1 && i === 0);
         const a = cell.verts[i];
         const b = cell.verts[(i + 1) % cell.vertIdx.length];
         const dx = b[0] - a[0], dz = b[1] - a[1];
         const elen = Math.hypot(dx, dz);
         if (elen < 0.6) continue;  // 邊太短不放窗
         const nx = -dz / elen, nz = dx / elen;
-        const y = lvl * BLOCK_HEIGHT + 0.5;
+        const y = (blockBottomY(lvl) + blockTopY(lvl)) * 0.5;   // 該層牆面中點
         // 長牆 (>1.4) 放 2 扇等距，短/中牆 1 扇置中
         const winCount = elen > 1.4 ? 2 : 1;
         // 地面層門牆：減 1（門已佔用中央）
@@ -913,56 +879,6 @@ function buildWindows() {
   }
   windowInstMesh.instanceMatrix.needsUpdate = true;
   windowsGroup.add(windowInstMesh);
-}
-
-// ===== 水下基座：第一層方塊存在時，沿外露邊長出石材牆面（從 y=0 往下到 FOUNDATION_BOTTOM）=====
-// 相鄰建築共用基座 → 只建外露邊。底部封口可省略（沉在水下不可見）。
-// 設計動機：模仿 Townscaper「初始海洋，建築自帶土地」的玩法
-let foundationsMesh = null;
-function buildFoundations() {
-  if (foundationsMesh) {
-    foundationsGroup.remove(foundationsMesh);
-    foundationsMesh.geometry.dispose();
-    foundationsMesh = null;
-  }
-  const positions = [], normals = [], indices = [];
-  let vb = 0;
-  for (const cell of cells) {
-    if (!cell.blocks.length) continue;
-    const N = cell.vertIdx.length;
-    for (let i = 0; i < N; i++) {
-      const nb = cell.neighbors[i];
-      // 鄰格也有 level-0 方塊 → 共用基座，內部邊不建
-      if (nb !== null && cells[nb].blocks.length > 0) continue;
-      const a = cell.verts[i], b = cell.verts[(i + 1) % N];
-      const ax = a[0], az = a[1], bx = b[0], bz = b[1];
-      const dx = bx - ax, dz = bz - az;
-      const len = Math.hypot(dx, dz);
-      if (len < 1e-4) continue;
-      const nx = -dz / len, nz = dx / len;   // outward
-      // 4 個頂點：a_top, b_top, b_bot, a_bot
-      positions.push(
-        ax, 0, az,
-        bx, 0, bz,
-        bx, FOUNDATION_BOTTOM, bz,
-        ax, FOUNDATION_BOTTOM, az,
-      );
-      for (let k = 0; k < 4; k++) normals.push(nx, 0, nz);
-      // CW 外凸：(0, 1, 2), (0, 2, 3) → 正面朝外
-      indices.push(vb, vb + 1, vb + 2, vb, vb + 2, vb + 3);
-      vb += 4;
-    }
-  }
-  if (!indices.length) return;
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  g.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  g.setIndex(indices);
-  g.computeBoundingSphere();
-  foundationsMesh = new THREE.Mesh(g, cliffMat);
-  foundationsMesh.castShadow = true;
-  foundationsMesh.receiveShadow = true;
-  foundationsGroup.add(foundationsMesh);
 }
 
 // 門：拱形幾何（LOCAL 平面，向 +Z 面）
@@ -1008,16 +924,18 @@ function buildDoors() {
     doorInstMesh = null;
   }
   const insts = [];
-  // 改成「整棟一道門」：每棟建築收集所有外露 level 0 邊，挑最長的那段放門
+  // 整棟一道門：每棟建築收集所有「至少 1 樓外露」的邊，挑最長那段放門
   // 大棟建築允許 1~2 道（每 6 cell + 1 道）
+  // 門放在 FOUNDATION_TOP_Y 高度（站在地基上），需要有 lvl≥1 樓層才放門
   for (let bid = 0; bid < buildingCells.length; bid++) {
     const cellIds = buildingCells[bid];
     const visEdges = [];
     for (const cid of cellIds) {
       const cell = cells[cid];
+      if (cell.blocks.length < 2) continue;     // 只有地基沒樓層 → 無門
       for (let i = 0; i < cell.vertIdx.length; i++) {
         const nei = cell.neighbors[i];
-        if (nei !== null && cells[nei].blocks[0]) continue;
+        if (nei !== null && cells[nei].blocks[1]) continue;   // 1 樓共邊 → 內牆，不放門
         const a = cell.verts[i], b = cell.verts[(i + 1) % cell.vertIdx.length];
         const elen = Math.hypot(b[0] - a[0], b[1] - a[1]);
         if (elen < 0.55) continue;
@@ -1025,7 +943,6 @@ function buildDoors() {
       }
     }
     if (!visEdges.length) continue;
-    // 挑最長的；大棟建築允許多道
     visEdges.sort((x, y) => y.elen - x.elen);
     const doorCount = Math.min(visEdges.length, 1 + Math.floor(cellIds.length / 6));
     for (let k = 0; k < doorCount; k++) {
@@ -1036,8 +953,8 @@ function buildDoors() {
       const midX = (e.a[0] + e.b[0]) / 2;
       const midZ = (e.a[1] + e.b[1]) / 2;
       insts.push({
-        x: midX + nx * 0.045,   // 補償 subdivision 後牆面內縮
-        y: 0,
+        x: midX + nx * 0.045,
+        y: FOUNDATION_TOP_Y,      // 站在地基平頂上
         z: midZ + nz * 0.045,
         rotY: Math.atan2(nx, nz),
       });
@@ -1061,7 +978,6 @@ function buildDoors() {
 function refreshDecorations() {
   rebuildBuildings();
   buildBaseGridLines();
-  buildFoundations();
   buildWindows();
   buildDoors();
 }
@@ -1074,7 +990,6 @@ function scheduleDecorRefresh() {
   requestAnimationFrame(() => {
     _decorPending = false;
     buildBaseGridLines();
-    buildFoundations();
     buildWindows();
     buildDoors();
   });
@@ -1218,9 +1133,11 @@ function rebuildBuildingMesh(bid) {
         ao * tint[2] * roofColor.b,
       );
 
-      const y0 = lvl * BLOCK_HEIGHT;
-      const y1 = y0 + BLOCK_HEIGHT;
+      // 高度：lvl=0 是地基（從水下底到 FOUNDATION_TOP_Y），lvl≥1 是樓層 (BLOCK_HEIGHT)
+      const y0 = blockBottomY(lvl);
+      const y1 = blockTopY(lvl);
       const isTop = lvl === cell.blocks.length - 1;
+      const isFoundation = lvl === 0;
 
       // 牆面：3×3 細分，中央外推
       for (let i = 0; i < N; i++) {
@@ -1233,7 +1150,8 @@ function rebuildBuildingMesh(bid) {
         const len = Math.hypot(dx, dz);
         const nx = -dz / len, nz = dx / len;
         const ym = (y0 + y1) / 2;
-        const bulge = Math.min(WALL_BULGE, len * 0.08);
+        // 地基不外推（牆很高，bulge 在水面附近會看起來變形），樓層才用 pudding 效果
+        const bulge = isFoundation ? 0 : Math.min(WALL_BULGE, len * 0.08);
         const cmx = mx + nx * bulge, cmz = mz + nz * bulge;
         positions.push(
           ax, y0, az,   mx, y0, mz,    bx, y0, bz,
@@ -1267,8 +1185,25 @@ function rebuildBuildingMesh(bid) {
         }
       }
 
-      // 頂層屋頂
-      if (isTop) {
+      // 頂面處理：
+      //  - 地基為最頂層（只有地基無樓層）→ 畫「平頂蓋」，無屋頂
+      //  - 樓層為最頂層 → 畫斜屋頂
+      //  - 中間樓層（被上層覆蓋）→ 不畫頂
+      if (isTop && isFoundation) {
+        // === 地基平頂：水平 N-2 三角扇 ===
+        const startV = vertBase;
+        for (let i = 0; i < N; i++) {
+          positions.push(verts[i][0], y1, verts[i][1]);
+          normals.push(0, 1, 0);
+          pushWall(AO_TOP_CENTER * 0.92);   // 比建築頂面稍暗，視覺像石板
+        }
+        vertBase += N;
+        // CW from above 的扇形（normal up）→ 翻轉為 CCW
+        for (let i = 1; i < N - 1; i++) {
+          indices.push(startV, startV + i, startV + i + 1);
+        }
+      } else if (isTop) {
+        // === 樓層屋頂：斜屋頂（既有邏輯）===
         const baseStart = vertBase;
         let cellMaxW = 0;
         let perimMaxY = -Infinity;
@@ -1501,9 +1436,51 @@ renderer.domElement.addEventListener('pointerleave', () => {
 });
 renderer.domElement.addEventListener('contextmenu', (ev) => ev.preventDefault());
 
+// 游標 tooltip（HTML overlay），跟著滑鼠顯示 hover cell 與世界座標
+const cursorInfoEl = document.getElementById('cursor-info');
+function updateCursorInfo(ev, hit) {
+  if (!cursorInfoEl) return;
+  if (!hit) {
+    cursorInfoEl.classList.remove('show');
+    return;
+  }
+  const ud = hit.object.userData;
+  let cellId = -1, action = '—';
+  if (ud.type === 'ground') {
+    cellId = ud.cellId;
+    action = cells[cellId]?.blocks.length ? `疊第 ${cells[cellId].blocks.length} 層` : '建地基';
+  } else if (ud.type === 'column') {
+    const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
+    if (n && n.y > 0.5) {
+      cellId = closestCellAt(hit.point.x, hit.point.z);
+      if (cellId >= 0) action = `疊第 ${cells[cellId].blocks.length} 層`;
+    } else if (n) {
+      cellId = closestCellAt(hit.point.x + n.x * 0.6, hit.point.z + n.z * 0.6);
+      if (cellId >= 0) action = cells[cellId].blocks.length ? `疊第 ${cells[cellId].blocks.length} 層` : '建地基';
+    }
+  }
+  const cell = cellId >= 0 ? cells[cellId] : null;
+  const cellInfo = cell
+    ? `<b>cell #${cellId}</b> · ${cell.blocks.length} blocks · <span class="dim">(${cell.center[0].toFixed(2)}, ${cell.center[1].toFixed(2)})</span>`
+    : `<span class="dim">無 cell</span>`;
+  cursorInfoEl.innerHTML =
+    `<span class="row">${cellInfo}</span>` +
+    `<span class="row">hit <b>(${hit.point.x.toFixed(2)}, ${hit.point.y.toFixed(2)}, ${hit.point.z.toFixed(2)})</b></span>` +
+    `<span class="row">↪ <b>${action}</b></span>`;
+  cursorInfoEl.style.left = `${ev.clientX}px`;
+  cursorInfoEl.style.top = `${ev.clientY}px`;
+  cursorInfoEl.classList.add('show');
+}
+
 renderer.domElement.addEventListener('pointermove', (ev) => {
   const hit = pick(ev.clientX, ev.clientY);
   showHover(hit);
+  updateCursorInfo(ev, hit);
+});
+
+renderer.domElement.addEventListener('pointerleave', () => {
+  if (cursorInfoEl) cursorInfoEl.classList.remove('show');
+  showHover(null);
 });
 
 // Hover ghost：半透明預覽方塊（顯示會被放置的形狀與顏色）+ 柔和輪廓
@@ -1527,30 +1504,29 @@ function showHover(hit) {
     const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
     if (n && n.y > 0.5) {
       cellId = closestCellAt(hit.point.x, hit.point.z);
-      if (cellId >= 0) yBottom = cells[cellId].blocks.length * BLOCK_HEIGHT;
+      if (cellId >= 0) yBottom = cellTopY(cells[cellId]);
     } else if (n) {
       cellId = closestCellAt(hit.point.x + n.x * 0.6, hit.point.z + n.z * 0.6);
-      if (cellId >= 0) yBottom = cells[cellId].blocks.length * BLOCK_HEIGHT;
+      if (cellId >= 0) yBottom = cellTopY(cells[cellId]);
     }
   }
   if (cellId === null || cellId < 0) return;
   const cell = cells[cellId];
   const verts = cell.verts;
   const N = verts.length;
-  // 幽靈方塊：側面 + 頂面（半透明），使用當前選取顏色
+  const isFoundationPlacement = (cell.blocks.length === 0);
+
+  // 決定要預覽什麼形狀：
+  //  - 第一次放置 → 預覽地基（從水下到 FOUNDATION_TOP_Y），對應 block[0] 實際形狀
+  //  - 疊高樓層 → 預覽 1 格高的方塊在現有頂面之上
+  const y0 = isFoundationPlacement ? blockBottomY(0) : yBottom;
+  const y1 = isFoundationPlacement ? blockTopY(0)    : yBottom + BLOCK_HEIGHT;
+  // 腳印高度：地基模式貼在水面，樓層模式貼在底面之上
+  const footprintY = isFoundationPlacement ? (WATER_Y + 0.025) : (y0 + 0.012);
+
+  // === 3D 半透明方塊預覽 ===
   const positions = [], normals = [], indices = [];
   let vb = 0;
-  const y0 = yBottom, y1 = yBottom + BLOCK_HEIGHT;
-  for (let i = 0; i < N; i++) {
-    const a = verts[i], b = verts[(i + 1) % N];
-    const dx = b[0] - a[0], dz = b[1] - a[1];
-    const len = Math.hypot(dx, dz);
-    const nx = -dz / len, nz = dx / len;
-    positions.push(a[0], y0, a[1], b[0], y0, b[1], b[0], y1, b[1], a[1] ? null : null);
-    // reset positions with full quad
-  }
-  // 重新正確構造 positions (上面有 typo)
-  positions.length = 0;
   for (let i = 0; i < N; i++) {
     const a = verts[i], b = verts[(i + 1) % N];
     const dx = b[0] - a[0], dz = b[1] - a[1];
@@ -1561,7 +1537,6 @@ function showHover(hit) {
     indices.push(vb, vb + 1, vb + 2, vb, vb + 2, vb + 3);
     vb += 4;
   }
-  // 頂面（fan）
   const topStart = vb;
   for (let i = 0; i < N; i++) {
     positions.push(verts[i][0], y1, verts[i][1]);
@@ -1580,7 +1555,7 @@ function showHover(hit) {
   const mat = new THREE.MeshStandardMaterial({
     color: col,
     transparent: true,
-    opacity: 0.6,
+    opacity: isFoundationPlacement ? 0.45 : 0.60,   // 地基較透（不擋視線），樓層稍實
     roughness: 0.9,
     metalness: 0,
     flatShading: true,
@@ -1589,68 +1564,18 @@ function showHover(hit) {
   const ghost = new THREE.Mesh(geom, mat);
   ghostGroup.add(ghost);
 
-  // 是否為「第一層放置」（在空 cell 上）→ 需要預覽水下基座
-  const isFirstLevelPlacement = (yBottom === 0);
-
-  // === 腳印 (footprint) 高亮 ===
-  // 第一層放置：footprint 貼水面 (WATER_Y+0.02)，視覺上像「點水面選 cell」
-  // 疊高層：footprint 貼在現有方塊頂面 (y0+0.012)
-  const footprintY = isFirstLevelPlacement ? (WATER_Y + 0.025) : (y0 + 0.012);
+  // === Footprint：水面 / 頂面亮白色貼面，標示對應 cell 位置 ===
   const shape = new THREE.Shape(verts.map(v => new THREE.Vector2(v[0], v[1])));
-  const footprintGeom = new THREE.ShapeGeometry(shape);
-  footprintGeom.rotateX(Math.PI / 2);
+  const fpGeom = new THREE.ShapeGeometry(shape);
+  fpGeom.rotateX(Math.PI / 2);
   const footprintMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.35,
-    depthWrite: false,
-    side: THREE.DoubleSide,
+    color: 0xffffff, transparent: true, opacity: 0.40, depthWrite: false, side: THREE.DoubleSide,
   });
-  const footprint = new THREE.Mesh(footprintGeom, footprintMat);
+  const footprint = new THREE.Mesh(fpGeom, footprintMat);
   footprint.position.y = footprintY;
   ghostGroup.add(footprint);
 
-  // === 基座預覽：第一層放置時，畫一段從 y=0 到水面的半透明「準基座」===
-  // 視覺上補齊「方塊底到水面」的 0.8 單位空白，讓 hover 結果與放置後一致
-  if (isFirstLevelPlacement) {
-    const fdPos = [], fdNrm = [], fdIdx = [];
-    let fvb = 0;
-    for (let i = 0; i < N; i++) {
-      const a = verts[i], b = verts[(i + 1) % N];
-      const ax = a[0], az = a[1], bx = b[0], bz = b[1];
-      const dx = bx - ax, dz = bz - az;
-      const len = Math.hypot(dx, dz);
-      if (len < 1e-4) continue;
-      const nx = -dz / len, nz = dx / len;
-      // 4 個頂點：a_top, b_top, b_bot, a_bot；只蓋水面以上的露出段
-      fdPos.push(
-        ax, 0, az,
-        bx, 0, bz,
-        bx, WATER_Y, bz,
-        ax, WATER_Y, az,
-      );
-      for (let k = 0; k < 4; k++) fdNrm.push(nx, 0, nz);
-      fdIdx.push(fvb, fvb + 1, fvb + 2, fvb, fvb + 2, fvb + 3);
-      fvb += 4;
-    }
-    const fdGeom = new THREE.BufferGeometry();
-    fdGeom.setAttribute('position', new THREE.Float32BufferAttribute(fdPos, 3));
-    fdGeom.setAttribute('normal', new THREE.Float32BufferAttribute(fdNrm, 3));
-    fdGeom.setIndex(fdIdx);
-    const fdMat = new THREE.MeshStandardMaterial({
-      color: 0x6f5b48,           // 跟真實基座 cliffMat 同色系
-      transparent: true,
-      opacity: 0.40,
-      roughness: 0.95,
-      metalness: 0,
-      flatShading: true,
-      depthWrite: false,
-    });
-    const ghostFoundation = new THREE.Mesh(fdGeom, fdMat);
-    ghostGroup.add(ghostFoundation);
-  }
-
-  // === ghost 邊緣線條（明亮白色，從暗色升級）===
+  // ghost 邊緣線條（白色）
   const edgeGeom = new THREE.BufferGeometry();
   const ep = [];
   for (let i = 0; i < N; i++) {
@@ -1664,18 +1589,6 @@ function showHover(hit) {
     new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1.0, depthWrite: false }));
   ghostGroup.add(outline);
 
-  // === 底邊加粗環：在腳印之上再畫一圈明亮白邊，視覺上像「霓虹邊」 ===
-  const ringGeom = new THREE.BufferGeometry();
-  const rp = [];
-  for (let i = 0; i < N; i++) {
-    const a = verts[i], b = verts[(i + 1) % N];
-    rp.push(a[0], y0 + 0.018, a[1], b[0], y0 + 0.018, b[1]);
-  }
-  ringGeom.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
-  const ring = new THREE.LineSegments(ringGeom,
-    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: false, depthWrite: false }));
-  ghostGroup.add(ring);
-
   ghostState.cellId = cellId;
   ghostState.y = yBottom;
   ghostState.meshRef = ghost;
@@ -1687,14 +1600,14 @@ function showHover(hit) {
 function updateGhost() {
   if (!ghostState.meshRef) return;
   const t = performance.now() / 1000;
-  const bob = Math.sin(t * 2.6) * 0.05;
+  const bob = Math.sin(t * 2.6) * 0.04;
   ghostState.meshRef.position.y = bob;
   if (ghostState.outlineRef) ghostState.outlineRef.position.y = bob;
-  // ghost block 呼吸 0.50 ~ 0.70（比舊版亮）
-  ghostState.meshRef.material.opacity = 0.60 + Math.sin(t * 3.2) * 0.10;
-  // 腳印同步呼吸 0.25 ~ 0.45（淡出淡入更柔和）
+  // ghost block 呼吸 0.45 ~ 0.65
+  const baseOp = ghostState.meshRef.material.opacity > 0.5 ? 0.60 : 0.45;
+  ghostState.meshRef.material.opacity = baseOp + Math.sin(t * 3.2) * 0.10;
   if (ghostState.footprintRef) {
-    ghostState.footprintRef.material.opacity = 0.35 + Math.sin(t * 3.2 + 0.5) * 0.10;
+    ghostState.footprintRef.material.opacity = 0.40 + Math.sin(t * 3.2 + 0.5) * 0.12;
   }
 }
 

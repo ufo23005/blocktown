@@ -116,3 +116,26 @@
     z-index: 100;
   }
   #loading.hidden { display: none; }
+
+  /* 游標 tooltip：跟隨滑鼠，顯示 hover cell 與世界座標 */
+  #cursor-info {
+    position: fixed;
+    pointer-events: none;
+    z-index: 20;
+    padding: 6px 10px;
+    background: rgba(20, 30, 40, 0.78);
+    color: #d8e8f0;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    border-radius: 6px;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    transform: translate(14px, 14px);
+    display: none;
+    white-space: nowrap;
+  }
+  #cursor-info.show { display: block; }
+  #cursor-info b { color: #ffe1a0; font-weight: 600; }
+  #cursor-info .row { display: block; }
+  #cursor-info .dim { color: #8aa0b0; }
