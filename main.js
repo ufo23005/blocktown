@@ -2137,36 +2137,51 @@ function rebuildBuildingMesh(bid) {
           const w = vertexHeightWeight.get(regionKey) ?? 0;
           const isStrictBoundary = vertexIsRegionBoundary.has(regionKey);
           let px = verts[k][0], pz = verts[k][1], py;
-          if (isStrictBoundary) {
-            // 沿未被較高鄰格阻擋的邊推屋簷（Bug 3 修正）
-            let nxSum = 0, nzSum = 0;
-            let blockedCount = 0;
-            const edgeIndices = [k, (k - 1 + N) % N];
+
+          // === 水平外推：所有 boundary vert（含 ridge）都推 22cm → 屋簷均勻不縮減 ===
+          // 跨 region 累加所有同 region cell 的非共邊法線 → 共邊兩端推外方向跨 cell 一致，無裂縫
+          // 牆頂跟 roofBase.y 但 XZ 留在 cell perim → 牆在 ridge 端垂直延伸成 gable 牆，
+          //   屋簷在外側 22cm 同樣升高，中間用 soffit 水平條銜接
+          let nxSum = 0, nzSum = 0;
+          let nonInternalCount = 0;
+          for (const cid of vertexToCells.get(vidx)) {
+            if (buildingId.get(cid) !== bid) continue;
+            const c = cells[cid];
+            if (!c.blocks[lvl]) continue;
+            const vi = c.vertIdx.indexOf(vidx);
+            if (vi < 0) continue;
+            const edgeIndices = [vi, (vi - 1 + c.vertIdx.length) % c.vertIdx.length];
             for (const ei of edgeIndices) {
-              const nb = cell.neighbors[ei];
+              const nb = c.neighbors[ei];
+              const internal = nb !== null && cells[nb].blocks[lvl];
+              if (internal) continue;
               const blocking = nb !== null && cells[nb].blocks.length > lvl + 1;
-              if (blocking) { blockedCount++; continue; }
-              const ea = verts[ei];
-              const eb = verts[(ei + 1) % N];
+              if (blocking) continue;
+              const ea = c.verts[ei];
+              const eb = c.verts[(ei + 1) % c.vertIdx.length];
               const edx = eb[0] - ea[0];
               const edz = eb[1] - ea[1];
               const elen2 = Math.hypot(edx, edz);
               if (elen2 > 1e-6) {
                 nxSum += -edz / elen2;
                 nzSum +=  edx / elen2;
+                nonInternalCount++;
               }
             }
-            const nlen = Math.hypot(nxSum, nzSum);
-            if (nlen > 1e-4 && blockedCount < 2) {
-              px += (nxSum / nlen) * ROOF_OVERHANG;
-              pz += (nzSum / nlen) * ROOF_OVERHANG;
-              py = y1 - EAVE_DROOP;
-            } else {
-              py = y1;
-            }
+          }
+          const nlen = Math.hypot(nxSum, nzSum);
+          if (nonInternalCount > 0 && nlen > 1e-4) {
+            px += (nxSum / nlen) * ROOF_OVERHANG;
+            pz += (nzSum / nlen) * ROOF_OVERHANG;
+          }
+
+          // === Y：ridge raise 或 eave droop ===
+          if (isStrictBoundary) {
+            py = nonInternalCount > 0 ? (y1 - EAVE_DROOP) : y1;
           } else {
             py = y1 + w * ROOF_HEIGHT;
           }
+
           roofBase[k] = { x: px, y: py, z: pz, w };
         }
       }
@@ -2211,18 +2226,20 @@ function rebuildBuildingMesh(bid) {
         }
 
         // === 牆「頂」位置（Row 4）===
-        // 牆面強制垂直：XZ 永遠鎖在 cell perim，不跟屋簷外推
-        // Y 仍跟 roofBase（讓 gable 端牆能升到屋脊高度）
-        // 屋簷外推所形成的 horizontal 空洞由後面 soffit 三角形補
+        // 牆面強制垂直：XZ 鎖在 cell perim
+        // 頂層 Y 跟 roofBase.y 升到 ridge 形成垂直 gable 三角牆，但 cap 在 (apex - SAFETY)
+        // 避免牆頂頂點與屋頂 apex 共平面導致 Z-fight 破圖
+        const WALL_TOP_SAFETY = 0.10;     // 牆頂留 10cm 給屋頂，保證不貼面
+        const wallTopMaxY = y1 + ROOF_HEIGHT - WALL_TOP_SAFETY;
         let topAx = ax, topAy = y1, topAz = az;
         let topBx = bx, topBy = y1, topBz = bz;
         let topMx = mx, topMy = y1, topMz = mz;
         if (roofBase) {
           const rA = roofBase[i];
           const rB = roofBase[(i + 1) % N];
-          topAy = rA.y;
-          topBy = rB.y;
-          topMy = (rA.y + rB.y) / 2;
+          topAy = Math.min(rA.y, wallTopMaxY);
+          topBy = Math.min(rB.y, wallTopMaxY);
+          topMy = (topAy + topBy) / 2;
         }
 
         // === 中央 bulge（樓層才有）：只對 Row 2 中央生效 ===
