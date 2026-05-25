@@ -1242,22 +1242,76 @@ function buildRailings() {
 
 // ===== 水面泡沫光暈 =====
 // 每個地基 cell 在水面位置畫一圈半透明白色 ring（cell 外擴 FOAM_RADIUS）
-// 內邊（cell perimeter）alpha 偏高，外邊 alpha=0 → 軟性 fade
-const FOAM_RADIUS = 0.55;        // 更寬的泡沫帶 → 軟化水與地基的邊界
-const FOAM_INNER_ALPHA = 0.62;   // 更強的內側 alpha → 「水浪打在牆上」感
+// 動態：環形波紋向外擴散 + 微呼吸 + 飄移雜訊，呈現「水浪打在牆上」的動態感
+const FOAM_RADIUS = 0.55;
+const FOAM_INNER_ALPHA = 0.62;
 const _foamMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+    uInnerAlpha: { value: FOAM_INNER_ALPHA },
+  },
   vertexShader: `
-    attribute float alpha;
-    varying float vAlpha;
+    attribute float radialT;       // 0 = 內邊（貼牆）, 1 = 外邊（最外圍）
+    varying float vRadialT;
+    varying vec2 vWorldXZ;
     void main() {
-      vAlpha = alpha;
+      vRadialT = radialT;
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldXZ = wp.xz;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `,
   fragmentShader: `
-    varying float vAlpha;
+    uniform float uTime;
+    uniform float uInnerAlpha;
+    varying float vRadialT;
+    varying vec2 vWorldXZ;
+
+    // 簡易 value noise（用於泡沫飄移雜訊）
+    float hash21(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash21(i);
+      float b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0));
+      float d = hash21(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
     void main() {
-      gl_FragColor = vec4(0.95, 0.97, 1.0, vAlpha);
+      float t = vRadialT;   // 0 (內) → 1 (外)
+
+      // (1) 基礎徑向漸層：靠近牆面較亮，向外淡出
+      float fade = pow(1.0 - t, 1.4);
+
+      // (2) 微呼吸：整體 alpha 緩慢起伏（0.85~1.15）
+      float breath = 0.85 + sin(uTime * 0.7) * 0.15;
+
+      // (3) 向外傳播的環形波紋（亮帶）
+      //     相位 = t * 頻率 − time * 速度，使亮帶從內向外移動
+      float wavePhase = t * 16.0 - uTime * 2.0;
+      float wave = sin(wavePhase) * 0.5 + 0.5;
+      float waveHighlight = smoothstep(0.55, 0.95, wave) * 0.35;
+      // 第二層波紋，頻率略不同 → 兩波交疊，更自然
+      float wavePhase2 = t * 11.0 - uTime * 1.4 + 1.7;
+      float wave2 = sin(wavePhase2) * 0.5 + 0.5;
+      float waveHighlight2 = smoothstep(0.65, 0.95, wave2) * 0.20;
+      float ripples = (waveHighlight + waveHighlight2) * fade;
+
+      // (4) 飄移雜訊：sparkle 感
+      vec2 noiseUV = vWorldXZ * 2.5 + vec2(uTime * 0.12, uTime * 0.09);
+      float foamNoise = vnoise(noiseUV);
+      float sparkle = smoothstep(0.62, 0.88, foamNoise) * 0.30 * fade;
+
+      // 合成 alpha
+      float alpha = fade * breath * 0.5 + ripples + sparkle;
+      alpha = clamp(alpha, 0.0, 1.0) * uInnerAlpha;
+
+      gl_FragColor = vec4(0.95, 0.97, 1.0, alpha);
     }
   `,
   transparent: true,
@@ -1265,52 +1319,116 @@ const _foamMat = new THREE.ShaderMaterial({
   side: THREE.DoubleSide,
 });
 
+// 追蹤一棟建築的外輪廓周長（按 cell.verts CW 順序連成 closed loop）
+// 回傳 [loop1, loop2, ...]，每個 loop 是 vidx 陣列（首尾不重複）
+// 一般 simply-connected 建築只有一個 loop
+function traceBuildingPerimeter(cellIds) {
+  const cellIdSet = new Set(cellIds);
+  // 每個 perimeter edge: fromVidx → toVidx
+  // 收集成 outgoingMap: fromVidx → [toVidx, ...]
+  const outgoingMap = new Map();
+  for (const cid of cellIds) {
+    const cell = cells[cid];
+    for (let i = 0; i < cell.vertIdx.length; i++) {
+      const nb = cell.neighbors[i];
+      // 共邊內部（同棟）→ 不是 perimeter
+      if (nb !== null && cellIdSet.has(nb)) continue;
+      const fromV = cell.vertIdx[i];
+      const toV = cell.vertIdx[(i + 1) % cell.vertIdx.length];
+      if (!outgoingMap.has(fromV)) outgoingMap.set(fromV, []);
+      outgoingMap.get(fromV).push(toV);
+    }
+  }
+  // 從每個未訪問的 edge 開始追蹤 loop
+  const visited = new Set();
+  const loops = [];
+  for (const [startFrom, edges] of outgoingMap.entries()) {
+    for (const startTo of edges) {
+      const startKey = `${startFrom}_${startTo}`;
+      if (visited.has(startKey)) continue;
+      const loop = [];
+      let curFrom = startFrom, curTo = startTo;
+      while (true) {
+        const key = `${curFrom}_${curTo}`;
+        if (visited.has(key)) break;
+        visited.add(key);
+        loop.push(curFrom);
+        const nextList = outgoingMap.get(curTo);
+        if (!nextList || nextList.length === 0) break;
+        // 找下一條未訪問的 outgoing edge
+        let nextTo = null;
+        for (const cand of nextList) {
+          if (!visited.has(`${curTo}_${cand}`)) { nextTo = cand; break; }
+        }
+        if (nextTo === null) break;
+        curFrom = curTo;
+        curTo = nextTo;
+      }
+      if (loop.length >= 3) loops.push(loop);
+    }
+  }
+  return loops;
+}
+
 function buildWaterFoam() {
   disposeGroup(foamGroup);
-  for (const cell of cells) {
-    if (!cell.blocks.length) continue;
-    // 1. 外擴 cell verts：從 cell.center 朝外推 FOAM_RADIUS
-    const expanded = cell.verts.map(v => {
-      const dx = v[0] - cell.center[0];
-      const dz = v[1] - cell.center[1];
-      const d = Math.hypot(dx, dz);
-      const s = d > 1e-6 ? (d + FOAM_RADIUS) / d : 1;
-      return [cell.center[0] + dx * s, cell.center[1] + dz * s];
-    });
-    // 2. 建立 Shape (外擴) + hole (原 cell) → 環狀
-    const shape = new THREE.Shape(expanded.map(v => new THREE.Vector2(v[0], v[1])));
-    const hole = new THREE.Path();
-    hole.moveTo(cell.verts[0][0], cell.verts[0][1]);
-    for (let i = 1; i < cell.verts.length; i++) {
-      hole.lineTo(cell.verts[i][0], cell.verts[i][1]);
-    }
-    hole.closePath();
-    shape.holes.push(hole);
-    const geom = new THREE.ShapeGeometry(shape);
-    geom.rotateX(Math.PI / 2);    // xy → xz 攤平
-    geom.translate(0, WATER_Y + 0.015, 0);   // 微浮於水面之上避免 z-fight
 
-    // 3. 為每個 vert 算 alpha：依距 cell.center 的距離線性內插
-    let sumR = 0;
-    for (const v of cell.verts) {
-      sumR += Math.hypot(v[0] - cell.center[0], v[1] - cell.center[1]);
-    }
-    const innerR = sumR / cell.verts.length;
-    const outerR = innerR + FOAM_RADIUS;
-    const posAttr = geom.attributes.position;
-    const alphas = new Float32Array(posAttr.count);
-    for (let i = 0; i < posAttr.count; i++) {
-      const x = posAttr.getX(i);
-      const z = posAttr.getZ(i);
-      const d = Math.hypot(x - cell.center[0], z - cell.center[1]);
-      const t = Math.max(0, Math.min(1, (outerR - d) / (outerR - innerR)));
-      alphas[i] = FOAM_INNER_ALPHA * t;
-    }
-    geom.setAttribute('alpha', new THREE.Float32BufferAttribute(alphas, 1));
+  // 每棟建築一個統一的 foam ring（從建築外輪廓向外擴）
+  for (let bid = 0; bid < buildingCells.length; bid++) {
+    const cellIds = buildingCells[bid];
+    if (!cellIds || !cellIds.length) continue;
 
-    const mesh = new THREE.Mesh(geom, _foamMat);
-    mesh.renderOrder = 0.5;   // 水之後、半透明 ghost 之前
-    foamGroup.add(mesh);
+    const loops = traceBuildingPerimeter(cellIds);
+
+    for (const loop of loops) {
+      // 內 path：建築外輪廓（vertexPositions 取得每個 vidx 的世界位置）
+      const innerPath = loop.map(vidx => {
+        const p = vertexPositions.get(vidx);
+        return { x: p[0], z: p[1] };
+      });
+
+      // 外 path：外輪廓向外擴 FOAM_RADIUS
+      // 用 foundationCorniceBase 推斷外推方向（已包含凹角 concaveFactor）：
+      //   方向 × FOAM_RADIUS = (corniceBase − vert) × (FOAM_RADIUS / CORNICE_BULGE)
+      const factor = FOAM_RADIUS / CORNICE_BULGE;
+      const outerPath = loop.map(vidx => {
+        const inP = vertexPositions.get(vidx);
+        const corB = foundationCorniceBase.get(vidx);
+        if (!corB) return { x: inP[0], z: inP[1] };
+        return {
+          x: inP[0] + (corB.x - inP[0]) * factor,
+          z: inP[1] + (corB.z - inP[1]) * factor,
+        };
+      });
+
+      // 建 Shape (outer) + hole (inner) → 環狀 mesh
+      const shape = new THREE.Shape(outerPath.map(p => new THREE.Vector2(p.x, p.z)));
+      const hole = new THREE.Path();
+      hole.moveTo(innerPath[0].x, innerPath[0].z);
+      for (let i = 1; i < innerPath.length; i++) {
+        hole.lineTo(innerPath[i].x, innerPath[i].z);
+      }
+      hole.closePath();
+      shape.holes.push(hole);
+
+      const geom = new THREE.ShapeGeometry(shape);
+      geom.rotateX(Math.PI / 2);
+      geom.translate(0, WATER_Y + 0.015, 0);
+
+      // radialT: ShapeGeometry 產生的 vert 順序為 [outer..., hole...]
+      // outer verts = 1（最外，foam 邊緣），inner verts = 0（最內，貼建築外牆）
+      const outerCount = outerPath.length;
+      const posCount = geom.attributes.position.count;
+      const radialT = new Float32Array(posCount);
+      for (let i = 0; i < posCount; i++) {
+        radialT[i] = i < outerCount ? 1.0 : 0.0;
+      }
+      geom.setAttribute('radialT', new THREE.Float32BufferAttribute(radialT, 1));
+
+      const mesh = new THREE.Mesh(geom, _foamMat);
+      mesh.renderOrder = 0.5;
+      foamGroup.add(mesh);
+    }
   }
 }
 
@@ -2702,6 +2820,7 @@ function animate() {
 
   const _t = performance.now() * 0.001;
   if (skyMaterial) skyMaterial.uniforms.uTime.value = _t;
+  if (_foamMat) _foamMat.uniforms.uTime.value = _t;   // 水波紋動態
   if (composer) composer.render(); else renderer.render(scene, camera);
 }
 animate();
