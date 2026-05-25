@@ -7,6 +7,9 @@
 # Claude Code 工作目錄（包含本機設定與素材，不應公開）
 .claude/
 
+# 參考素材（截圖、reference 圖片，不上傳）
+reference/
+
 # 編輯器設定
 .vscode/
 .idea/

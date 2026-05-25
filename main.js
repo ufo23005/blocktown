@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import Delaunator from 'delaunator';
 import { LoopSubdivision } from 'three-subdivide';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Townscaper 風奶油北歐配色：飽和度略降、明度略升，整體更柔和
 const PALETTE = [
@@ -31,9 +32,27 @@ const BLOCK_HEIGHT = 1.0;
 // 兩階段建造：第一次點擊 = 矮地基（block[0]），之後 = 正常樓層 + 屋頂
 // 地基為單一物件：從略沉水下到水面上 0.3 處（不需額外 cliffMat 基座）
 const FOUNDATION_TOP_Y = 0.3;              // 地基頂 = 樓層底
+
+// ===== Townscaper 風地基常數（必須在 _railingPostGeom 等之前宣告）=====
+// 地基是「海上獨立平台」概念，不受玩家配色影響，永遠灰藍石色
+const FOUNDATION_STONE_COLOR = '#8a96a4';   // 石頭灰藍（牆面，略亮以平衡 brick shader）
+const FOUNDATION_TOP_COLOR = '#bda280';     // 地基頂面 tan 色（陶磚地板）
+const CORNICE_COLOR = '#9c4838';            // 紅色 cornice 帶（brick red）
+const CORNICE_INNER_TOP_COLOR = '#b89070';  // cornice 內側 tan-orange 過渡色：與 floor 自然銜接，
+                                            // 但與 FOUNDATION_TOP_COLOR 不同 → 阻止 mergeVertices 合併（避免 dome 變形）
+const CORNICE_HEIGHT = 0.10;                // cornice 高度（向下延伸量，從 y1 算）
+const CORNICE_BULGE = 0.12;                 // cornice 向外推距離
+const CORNICE_INNER_INSET = 0.04;           // cornice 向內推距離（蓋住地板邊緣形成 rim 內側）
+const CORNICE_RIM_HEIGHT = 0.04;            // cornice 頂部高出地板的「rim 高度」（小，只是讓 rim 突起在地板之上）
+const FOUNDATION_BASE_FLARE = 0.08;         // 地基底部外擴距離（中段自動取 50% → 完整 barrel 曲線）
+const RAILING_COLOR = '#2a2a30';            // 鑄鐵欄杆色
+const RAILING_HEIGHT = 0.26;                // 欄杆總高
+const RAILING_POST_SPACING = 0.30;          // 立柱間距（依邊長均分）
+const RAILING_RADIUS = 0.018;               // 立柱與橫桿半徑
 // 注意：FOUNDATION_BOTTOM_Y 引用 WATER_Y，但 WATER_Y 在後面才宣告
 // → 用 getter 形式延後求值
-const getFoundationBottomY = () => WATER_Y - 0.05;
+// 地基底部深埋水下 0.20 → 底部邊隱於水中，又不會讓 ym 太深（避免 wall 頂角 subdivision 下沉過深）
+const getFoundationBottomY = () => WATER_Y - 0.20;
 
 // 樓層底/頂 y 計算（lvl=0 是地基，lvl≥1 是樓層）
 const blockBottomY = (lvl) => lvl <= 0 ? getFoundationBottomY() : FOUNDATION_TOP_Y + (lvl - 1) * BLOCK_HEIGHT;
@@ -631,9 +650,84 @@ buildVertexToCells();
 
 // 每個頂點在 region 內的「內部度」權重：0 = region 邊界, 1 = region 中心
 // 讓屋頂高度形成平滑圓頂
-let vertexHeightWeight = new Map();  // vidx → 0..1（每次 rebuildBuildings 後重算）
+// Key = `${bid}_${level}_${vidx}` → per-region 隔離，避免跨建築 / 跨層污染
+let vertexHeightWeight = new Map();  // region-keyed → 0..1
 // 嚴格 region 邊界頂點集合：用於屋簷 overhang 判定（避免 smoothstep 模糊造成邊簷跳躍）
-let vertexIsRegionBoundary = new Set();
+let vertexIsRegionBoundary = new Set();   // region-keyed
+
+// 地基外推位置：對每個頂點，蒐集所有相鄰 cell 的外露邊（地基外圍邊），平均其外側法線。
+// 兩個 Map 共用同一個 outward direction：
+//  - foundationCorniceBase：頂部 cornice 外推位置（CORNICE_BULGE）
+//  - foundationBaseFlare  ：底部 flare 外推位置（FOUNDATION_BASE_FLARE）
+// 全域共用 → 同一個 vert 在 A、B 兩個地基的計算結果相同 → 相連地基的外圍自動對齊不斷裂
+let foundationCorniceBase = new Map();   // vidx → { x, z }（頂部外推：cornice 外緣）
+let foundationCorniceInner = new Map();  // vidx → { x, z }（頂部內推：cornice 內緣，蓋住地板邊緣）
+let foundationBaseFlare   = new Map();   // vidx → { x, z }（底部外推：wall barrel）
+function computeFoundationCorniceBase() {
+  foundationCorniceBase.clear();
+  foundationCorniceInner.clear();
+  foundationBaseFlare.clear();
+  for (const vidx of vertexToCells.keys()) {
+    let sumNx = 0, sumNz = 0;
+    let count = 0;
+    let cellCount = 0;   // 用於凹角偵測
+    for (const cid of vertexToCells.get(vidx)) {
+      const c = cells[cid];
+      if (!c.blocks.length) continue;   // 此 cell 沒有地基
+      cellCount++;
+      const vi = c.vertIdx.indexOf(vidx);
+      if (vi < 0) continue;
+      const edgeIndices = [vi, (vi - 1 + c.vertIdx.length) % c.vertIdx.length];
+      for (const ei of edgeIndices) {
+        const nb = c.neighbors[ei];
+        // 鄰格也是地基 → 共邊內部，不貢獻外推方向
+        if (nb !== null && cells[nb].blocks.length > 0) continue;
+        const ea = c.verts[ei];
+        const eb = c.verts[(ei + 1) % c.vertIdx.length];
+        const edx = eb[0] - ea[0];
+        const edz = eb[1] - ea[1];
+        const elen = Math.hypot(edx, edz);
+        if (elen > 1e-6) {
+          sumNx += -edz / elen;
+          sumNz +=  edx / elen;
+          count++;
+        }
+      }
+    }
+    // === 凹角圓弧處理 ===
+    // 偵測 L-shape 內凹角：vert 上有 ≥3 個地基 cell（標準凹角拓樸）
+    // 凹角的 push 大幅縮減 → cornice/wall 在凹角處「向內收」→ 形成圓弧過渡
+    // 鄰近凸角全 push、凹角 30% push → 中間漸變視覺成弧形
+    const isConcave = cellCount >= 3;
+    const concaveFactor = isConcave ? 0.3 : 1.0;
+
+    const basePos = vertexPositions.get(vidx);
+    if (!basePos) continue;
+    const nlen = Math.hypot(sumNx, sumNz);
+    if (nlen > 1e-4 && count > 0) {
+      const dx = sumNx / nlen;
+      const dz = sumNz / nlen;
+      foundationCorniceBase.set(vidx, {
+        x: basePos[0] + dx * CORNICE_BULGE * concaveFactor,
+        z: basePos[1] + dz * CORNICE_BULGE * concaveFactor,
+      });
+      // 內推：negative dx/dz 方向（朝 cell 內）→ cornice 內緣蓋住地板邊
+      foundationCorniceInner.set(vidx, {
+        x: basePos[0] - dx * CORNICE_INNER_INSET * concaveFactor,
+        z: basePos[1] - dz * CORNICE_INNER_INSET * concaveFactor,
+      });
+      foundationBaseFlare.set(vidx, {
+        x: basePos[0] + dx * FOUNDATION_BASE_FLARE * concaveFactor,
+        z: basePos[1] + dz * FOUNDATION_BASE_FLARE * concaveFactor,
+      });
+    } else {
+      // 全是內部頂點（建築深處），不會用到，但保險
+      foundationCorniceBase.set(vidx, { x: basePos[0], z: basePos[1] });
+      foundationCorniceInner.set(vidx, { x: basePos[0], z: basePos[1] });
+      foundationBaseFlare.set(vidx, { x: basePos[0], z: basePos[1] });
+    }
+  }
+}
 
 // 連通分量：把相鄰的已蓋格分為「建築」，便於做整棟級別的協調
 let buildingId = new Map();   // cellId → buildingId
@@ -661,6 +755,7 @@ function rebuildBuildings() {
     nextId++;
   }
   computeVertexHeightWeights();
+  computeFoundationCorniceBase();
 }
 
 // 為每個頂點計算「region 內部度」權重（0=純邊界、1=最內部）
@@ -702,14 +797,15 @@ function computeVertexHeightWeights() {
           }
         }
         const fraction = totalEdges > 0 ? internalEdges / totalEdges : 0;
+        const key = `${bid}_${level}_${vidx}`;
         if (fraction <= 0.01) {
-          vertexIsRegionBoundary.add(vidx);
+          vertexIsRegionBoundary.add(key);
         } else {
           // 激進曲線：fraction>=0.5 的頂點（典型相鄰格共邊端點）直接拉到頂端 w=1。
           // 這樣 2 格並排時共邊就完整成為屋脊，形成 Townscaper 風的 gable 而非 dome。
           // fraction<0.5 的少見退化情況才會留中間值。
           const w = Math.min(1, fraction * 2);
-          vertexHeightWeight.set(vidx, w);
+          vertexHeightWeight.set(key, w);
         }
       }
     }
@@ -745,6 +841,19 @@ const windowsGroup = new THREE.Group();
 scene.add(windowsGroup);
 const doorsGroup = new THREE.Group();
 scene.add(doorsGroup);
+// 鑄鐵欄杆 group：沿地基外圍頂部包覆
+const railingsGroup = new THREE.Group();
+scene.add(railingsGroup);
+// 水面泡沫 group：每個地基 cell 在水面外擴一圈半透明白色 halo
+const foamGroup = new THREE.Group();
+scene.add(foamGroup);
+// 地基頂面 group：獨立 mesh，跳過 Loop subdivision → corner 精確保留在 cell 邊上、無收縮缺口
+const floorsGroup = new THREE.Group();
+scene.add(floorsGroup);
+// 地基 cornice group：獨立 mesh，跳過 Loop subdivision
+// → 避免 cornice 外角被 boundary smoothing 從 (cell+0.04) 拉到 (cell-0.1) 縮進 floor 內
+const cornicesGroup = new THREE.Group();
+scene.add(cornicesGroup);
 
 // 拱形窗戶：Shape 做上半圓 + 下矩形
 function _buildArchedWindowGeom() {
@@ -838,8 +947,9 @@ function buildWindows() {
       for (let i = 0; i < cell.vertIdx.length; i++) {
         const nei = cell.neighbors[i];
         if (nei !== null && cells[nei].blocks[lvl]) continue;
-        // 一樓地面層第一面（i==0）幾乎一定會放門 → 第 0 面跳過避免門+窗重疊
-        const isDoorWall = (lvl === 1 && i === 0);
+        // 門牆判定：以 buildDoors 實際選中的牆為準（不再用「i==0」這種錯誤啟發式）
+        // 確保門+窗不會撞在同一面短牆中央
+        const isDoorWall = (lvl === 1 && doorWalls.has(`${cell.id}_${i}`));
         const a = cell.verts[i];
         const b = cell.verts[(i + 1) % cell.vertIdx.length];
         const dx = b[0] - a[0], dz = b[1] - a[1];
@@ -916,6 +1026,9 @@ const _doorMat = new THREE.MeshStandardMaterial({
   color: 0x1c1a1f, roughness: 0.55, metalness: 0.25,
 });
 let doorInstMesh = null;
+// 已被門佔用的牆面：`${cellId}_${edgeIdx}`
+// buildDoors 寫入、buildWindows 讀取，避免同一面牆同時放門又放窗
+const doorWalls = new Set();
 
 function buildDoors() {
   if (doorInstMesh) {
@@ -923,6 +1036,7 @@ function buildDoors() {
     doorInstMesh.dispose();
     doorInstMesh = null;
   }
+  doorWalls.clear();
   const insts = [];
   // 整棟一道門：每棟建築收集所有「至少 1 樓外露」的邊，挑最長那段放門
   // 大棟建築允許 1~2 道（每 6 cell + 1 道）
@@ -939,7 +1053,7 @@ function buildDoors() {
         const a = cell.verts[i], b = cell.verts[(i + 1) % cell.vertIdx.length];
         const elen = Math.hypot(b[0] - a[0], b[1] - a[1]);
         if (elen < 0.55) continue;
-        visEdges.push({ a, b, elen });
+        visEdges.push({ a, b, elen, cellId: cid, edgeIdx: i });
       }
     }
     if (!visEdges.length) continue;
@@ -947,6 +1061,7 @@ function buildDoors() {
     const doorCount = Math.min(visEdges.length, 1 + Math.floor(cellIds.length / 6));
     for (let k = 0; k < doorCount; k++) {
       const e = visEdges[k];
+      doorWalls.add(`${e.cellId}_${e.edgeIdx}`);
       const dx = e.b[0] - e.a[0], dz = e.b[1] - e.a[1];
       const elen = e.elen;
       const nx = -dz / elen, nz = dx / elen;
@@ -975,11 +1090,428 @@ function buildDoors() {
   doorsGroup.add(doorInstMesh);
 }
 
+// ===== 鑄鐵欄杆：包圍地基外圍頂部 =====
+// 立柱：細直圓柱（6 邊）；橫桿：水平圓柱，用 scale.x 拉長到邊長
+const _railingPostGeom = new THREE.CylinderGeometry(RAILING_RADIUS, RAILING_RADIUS, RAILING_HEIGHT, 6);
+// 橫桿用 1.0 單位長，再透過 scale.x 拉伸到實際邊長
+const _railingBarGeom = new THREE.CylinderGeometry(RAILING_RADIUS * 0.85, RAILING_RADIUS * 0.85, 1.0, 6);
+// rotateZ(-π/2)：把 CylinderGeometry 預設的 +Y 軸轉成 +X 軸（橫向）
+// 這樣 instance 的 scale.x 直接控制橫桿長度
+_railingBarGeom.rotateZ(-Math.PI / 2);
+const _railingMat = new THREE.MeshStandardMaterial({
+  color: RAILING_COLOR,
+  roughness: 0.55,
+  metalness: 0.35,
+});
+// 立柱頂端小球（finial）：略大半徑的球體
+const _railingFinialGeom = new THREE.SphereGeometry(RAILING_RADIUS * 1.7, 8, 6);
+
+let railingPostInst = null;
+let railingBarInst = null;
+let railingFinialInst = null;
+
+function buildRailings() {
+  if (railingPostInst) {
+    railingsGroup.remove(railingPostInst);
+    railingPostInst.dispose();
+    railingPostInst = null;
+  }
+  if (railingBarInst) {
+    railingsGroup.remove(railingBarInst);
+    railingBarInst.dispose();
+    railingBarInst = null;
+  }
+  if (railingFinialInst) {
+    railingsGroup.remove(railingFinialInst);
+    railingFinialInst.dispose();
+    railingFinialInst = null;
+  }
+
+  const postInsts = [];
+  const barInsts = [];
+  const finialInsts = [];
+
+  for (const cell of cells) {
+    if (!cell.blocks.length) continue;   // 沒地基 → 沒欄杆
+    const N = cell.vertIdx.length;
+    for (let i = 0; i < N; i++) {
+      const nei = cell.neighbors[i];
+      if (nei !== null && cells[nei].blocks.length > 0) continue;   // 內部邊，不放欄杆
+
+      const vidxA = cell.vertIdx[i];
+      const vidxB = cell.vertIdx[(i + 1) % N];
+      const cA = foundationCorniceBase.get(vidxA);
+      const cB = foundationCorniceBase.get(vidxB);
+      const iA = foundationCorniceInner.get(vidxA);
+      const iB = foundationCorniceInner.get(vidxB);
+      if (!cA || !cB || !iA || !iB) continue;
+
+      // 欄杆 XZ 位置：放在 cornice 的「中間」(inner 與 outer 的平均)
+      // → 從外面看不會太靠邊，視覺上立在紅磚帶正中
+      const mA_x = (iA.x + cA.x) / 2;
+      const mA_z = (iA.z + cA.z) / 2;
+      const mB_x = (iB.x + cB.x) / 2;
+      const mB_z = (iB.z + cB.z) / 2;
+
+      const ex = mB_x - mA_x, ez = mB_z - mA_z;
+      const elen = Math.hypot(ex, ez);
+      if (elen < 1e-4) continue;
+      // 橫桿 local +X (取自 _railingBarGeom rotateZ(-π/2)) 經 rotation.y=θ 後
+      // 變成 (cos θ, 0, -sin θ)；要對齊邊方向 (ex/e, 0, ez/e):
+      //   cos θ = ex/e, -sin θ = ez/e → θ = atan2(-ez, ex)
+      const angle = Math.atan2(-ez, ex);
+
+      // 立柱：依邊長等分
+      const numPosts = Math.max(2, Math.round(elen / RAILING_POST_SPACING) + 1);
+      for (let p = 0; p < numPosts; p++) {
+        const t = p / (numPosts - 1);
+        const px = mA_x + ex * t;
+        const pz = mA_z + ez * t;
+        postInsts.push({
+          x: px,
+          y: FOUNDATION_TOP_Y + CORNICE_RIM_HEIGHT + RAILING_HEIGHT * 0.5,   // CylinderGeometry 是中心對齊
+          z: pz,
+        });
+        // 立柱頂端小球
+        finialInsts.push({
+          x: px,
+          y: FOUNDATION_TOP_Y + CORNICE_RIM_HEIGHT + RAILING_HEIGHT + RAILING_RADIUS * 0.3,
+          z: pz,
+        });
+      }
+
+      // 上下兩條橫桿：頂桿 + 中桿
+      const barYTop = FOUNDATION_TOP_Y + CORNICE_RIM_HEIGHT + RAILING_HEIGHT - RAILING_RADIUS * 2;
+      const barYMid = FOUNDATION_TOP_Y + CORNICE_RIM_HEIGHT + RAILING_HEIGHT * 0.45;
+      const midX = (mA_x + mB_x) / 2;
+      const midZ = (mA_z + mB_z) / 2;
+      for (const by of [barYTop, barYMid]) {
+        barInsts.push({ x: midX, y: by, z: midZ, scale: elen, rotY: angle });
+      }
+    }
+  }
+
+  if (postInsts.length > 0) {
+    railingPostInst = new THREE.InstancedMesh(_railingPostGeom, _railingMat, postInsts.length);
+    railingPostInst.castShadow = true;
+    railingPostInst.receiveShadow = false;
+    const tmp = new THREE.Object3D();
+    for (let i = 0; i < postInsts.length; i++) {
+      tmp.position.set(postInsts[i].x, postInsts[i].y, postInsts[i].z);
+      tmp.rotation.set(0, 0, 0);
+      tmp.scale.set(1, 1, 1);
+      tmp.updateMatrix();
+      railingPostInst.setMatrixAt(i, tmp.matrix);
+    }
+    railingPostInst.instanceMatrix.needsUpdate = true;
+    railingsGroup.add(railingPostInst);
+  }
+
+  if (barInsts.length > 0) {
+    railingBarInst = new THREE.InstancedMesh(_railingBarGeom, _railingMat, barInsts.length);
+    railingBarInst.castShadow = true;
+    railingBarInst.receiveShadow = false;
+    const tmp = new THREE.Object3D();
+    for (let i = 0; i < barInsts.length; i++) {
+      tmp.position.set(barInsts[i].x, barInsts[i].y, barInsts[i].z);
+      tmp.rotation.set(0, barInsts[i].rotY, 0);
+      tmp.scale.set(barInsts[i].scale, 1, 1);
+      tmp.updateMatrix();
+      railingBarInst.setMatrixAt(i, tmp.matrix);
+    }
+    railingBarInst.instanceMatrix.needsUpdate = true;
+    railingsGroup.add(railingBarInst);
+  }
+
+  if (finialInsts.length > 0) {
+    railingFinialInst = new THREE.InstancedMesh(_railingFinialGeom, _railingMat, finialInsts.length);
+    railingFinialInst.castShadow = true;
+    railingFinialInst.receiveShadow = false;
+    const tmp = new THREE.Object3D();
+    for (let i = 0; i < finialInsts.length; i++) {
+      tmp.position.set(finialInsts[i].x, finialInsts[i].y, finialInsts[i].z);
+      tmp.rotation.set(0, 0, 0);
+      tmp.scale.set(1, 1, 1);
+      tmp.updateMatrix();
+      railingFinialInst.setMatrixAt(i, tmp.matrix);
+    }
+    railingFinialInst.instanceMatrix.needsUpdate = true;
+    railingsGroup.add(railingFinialInst);
+  }
+}
+
+// ===== 水面泡沫光暈 =====
+// 每個地基 cell 在水面位置畫一圈半透明白色 ring（cell 外擴 FOAM_RADIUS）
+// 內邊（cell perimeter）alpha 偏高，外邊 alpha=0 → 軟性 fade
+const FOAM_RADIUS = 0.55;        // 更寬的泡沫帶 → 軟化水與地基的邊界
+const FOAM_INNER_ALPHA = 0.62;   // 更強的內側 alpha → 「水浪打在牆上」感
+const _foamMat = new THREE.ShaderMaterial({
+  vertexShader: `
+    attribute float alpha;
+    varying float vAlpha;
+    void main() {
+      vAlpha = alpha;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    varying float vAlpha;
+    void main() {
+      gl_FragColor = vec4(0.95, 0.97, 1.0, vAlpha);
+    }
+  `,
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+
+function buildWaterFoam() {
+  disposeGroup(foamGroup);
+  for (const cell of cells) {
+    if (!cell.blocks.length) continue;
+    // 1. 外擴 cell verts：從 cell.center 朝外推 FOAM_RADIUS
+    const expanded = cell.verts.map(v => {
+      const dx = v[0] - cell.center[0];
+      const dz = v[1] - cell.center[1];
+      const d = Math.hypot(dx, dz);
+      const s = d > 1e-6 ? (d + FOAM_RADIUS) / d : 1;
+      return [cell.center[0] + dx * s, cell.center[1] + dz * s];
+    });
+    // 2. 建立 Shape (外擴) + hole (原 cell) → 環狀
+    const shape = new THREE.Shape(expanded.map(v => new THREE.Vector2(v[0], v[1])));
+    const hole = new THREE.Path();
+    hole.moveTo(cell.verts[0][0], cell.verts[0][1]);
+    for (let i = 1; i < cell.verts.length; i++) {
+      hole.lineTo(cell.verts[i][0], cell.verts[i][1]);
+    }
+    hole.closePath();
+    shape.holes.push(hole);
+    const geom = new THREE.ShapeGeometry(shape);
+    geom.rotateX(Math.PI / 2);    // xy → xz 攤平
+    geom.translate(0, WATER_Y + 0.015, 0);   // 微浮於水面之上避免 z-fight
+
+    // 3. 為每個 vert 算 alpha：依距 cell.center 的距離線性內插
+    let sumR = 0;
+    for (const v of cell.verts) {
+      sumR += Math.hypot(v[0] - cell.center[0], v[1] - cell.center[1]);
+    }
+    const innerR = sumR / cell.verts.length;
+    const outerR = innerR + FOAM_RADIUS;
+    const posAttr = geom.attributes.position;
+    const alphas = new Float32Array(posAttr.count);
+    for (let i = 0; i < posAttr.count; i++) {
+      const x = posAttr.getX(i);
+      const z = posAttr.getZ(i);
+      const d = Math.hypot(x - cell.center[0], z - cell.center[1]);
+      const t = Math.max(0, Math.min(1, (outerR - d) / (outerR - innerR)));
+      alphas[i] = FOAM_INNER_ALPHA * t;
+    }
+    geom.setAttribute('alpha', new THREE.Float32BufferAttribute(alphas, 1));
+
+    const mesh = new THREE.Mesh(geom, _foamMat);
+    mesh.renderOrder = 0.5;   // 水之後、半透明 ghost 之前
+    foamGroup.add(mesh);
+  }
+}
+
+// ===== 地基頂面（獨立 mesh，跳過 Loop subdivision）=====
+// 這是修正 corner 缺口的關鍵：Loop subdivision 對 boundary corner 強制內縮 0.125
+// 把地面拆出 buildingMesh 後，corner 完全保留在 cell 邊上 → cornice 紅帶緊鄰 floor edge 無縫
+let foundationFloorsMesh = null;
+function buildFoundationFloors() {
+  if (foundationFloorsMesh) {
+    floorsGroup.remove(foundationFloorsMesh);
+    foundationFloorsMesh.geometry.dispose();
+    foundationFloorsMesh = null;
+  }
+
+  const positions = [];
+  const normals = [];
+  const colors = [];
+  const indices = [];
+  let vertBase = 0;
+  const tan = new THREE.Color(FOUNDATION_TOP_COLOR);
+
+  for (const cell of cells) {
+    // 只在「有地基且沒有樓層覆蓋」時才畫地面（蓋了樓層的話地面不可見）
+    if (cell.blocks.length !== 1) continue;
+    const bid = buildingId.get(cell.id);
+    if (bid == null) continue;
+
+    const verts = cell.verts;
+    const N = verts.length;
+    const cx = cell.center[0];
+    const cz = cell.center[1];
+    const y1 = FOUNDATION_TOP_Y;
+
+    // 同 buildingMesh 的 tint 計算邏輯，保持每棟視覺一致
+    const baseTint = buildingTint(bid);
+    const lh = ((cell.id * 7919) >>> 0);
+    const tintR = baseTint[0] * (1 + (((lh & 0x7F) / 127) - 0.5) * 0.04);
+    const tintG = baseTint[1] * (1 + ((((lh >> 7) & 0x7F) / 127) - 0.5) * 0.04);
+    const tintB = baseTint[2] * (1 + ((((lh >> 14) & 0x7F) / 127) - 0.5) * 0.04);
+    const pushVert = (ao) => colors.push(
+      ao * tintR * tan.r,
+      ao * tintG * tan.g,
+      ao * tintB * tan.b,
+    );
+
+    const startV = vertBase;
+    // N 個 perimeter verts（精確在 cell corner，無 subdivision 收縮）
+    for (let i = 0; i < N; i++) {
+      positions.push(verts[i][0], y1, verts[i][1]);
+      normals.push(0, 1, 0);
+      pushVert(AO_WALL_MID);
+    }
+    // 中心 vert（讓中央較亮，視覺對稱）
+    positions.push(cx, y1, cz);
+    normals.push(0, 1, 0);
+    pushVert(AO_TOP_CENTER);
+
+    const centerIdx = startV + N;
+    vertBase += N + 1;
+    // 中心 fan：N 個三角形
+    // (center, vert_i, vert_{i+1}) 對 CW from above 的 cell verts 給出 +y normal
+    for (let i = 0; i < N; i++) {
+      indices.push(centerIdx, startV + i, startV + (i + 1) % N);
+    }
+  }
+
+  if (!indices.length) return;
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geom.setIndex(indices);
+  geom.computeBoundingSphere();
+
+  // 共用 buildingMaterial → 自動享有 shader 的 tile grid 圖案
+  foundationFloorsMesh = new THREE.Mesh(geom, buildingMaterial);
+  foundationFloorsMesh.castShadow = false;
+  foundationFloorsMesh.receiveShadow = true;
+  // 互動標記：點擊 floor → 在那個 cell 上疊樓層
+  foundationFloorsMesh.userData = { type: 'foundation_top' };
+  floorsGroup.add(foundationFloorsMesh);
+}
+
+// ===== 地基 Cornice（紅磚帶）獨立 mesh =====
+// 與 floor 同策略：跳過 Loop subdivision 避免 boundary 收縮
+// Subdivision 會把 cornice 外角從 (cell+0.04) 拉到 (cell-0.1)，整個縮進 floor 內 → 不可用
+// 獨立 mesh 保留精確的「牆頂邊緣 + bulge 外推」位置
+let foundationCornicesMesh = null;
+function buildFoundationCornices() {
+  if (foundationCornicesMesh) {
+    cornicesGroup.remove(foundationCornicesMesh);
+    foundationCornicesMesh.geometry.dispose();
+    foundationCornicesMesh = null;
+  }
+
+  const positions = [];
+  const normals = [];
+  const colors = [];
+  const indices = [];
+  let vertBase = 0;
+  const corniceColor = new THREE.Color(CORNICE_COLOR);
+
+  for (const cell of cells) {
+    if (!cell.blocks.length) continue;
+    const bid = buildingId.get(cell.id);
+    if (bid == null) continue;
+
+    const N = cell.vertIdx.length;
+    const y1 = FOUNDATION_TOP_Y;
+    const yCorBot = y1 - CORNICE_HEIGHT;
+    const yCorTop = y1 + CORNICE_RIM_HEIGHT;   // 抬高至地板之上，形成 rim
+
+    // tint per cell（與 wall 同邏輯）
+    const baseTint = buildingTint(bid);
+    const lh = ((cell.id * 7919) >>> 0);
+    const tintR = baseTint[0] * (1 + (((lh & 0x7F) / 127) - 0.5) * 0.04);
+    const tintG = baseTint[1] * (1 + ((((lh >> 7) & 0x7F) / 127) - 0.5) * 0.04);
+    const tintB = baseTint[2] * (1 + ((((lh >> 14) & 0x7F) / 127) - 0.5) * 0.04);
+    const pushVert = (ao) => colors.push(
+      ao * tintR * corniceColor.r,
+      ao * tintG * corniceColor.g,
+      ao * tintB * corniceColor.b,
+    );
+
+    for (let i = 0; i < N; i++) {
+      const nei = cell.neighbors[i];
+      if (nei !== null && cells[nei].blocks.length > 0) continue;  // 內部邊，無 cornice
+
+      const vidxA = cell.vertIdx[i];
+      const vidxB = cell.vertIdx[(i + 1) % N];
+      const cA = foundationCorniceBase.get(vidxA);
+      const cB = foundationCorniceBase.get(vidxB);
+      const iA = foundationCorniceInner.get(vidxA);   // 內推位置
+      const iB = foundationCorniceInner.get(vidxB);
+      if (!cA || !cB || !iA || !iB) continue;
+
+      const a = cell.verts[i], b = cell.verts[(i + 1) % N];
+      const dx = b[0] - a[0], dz = b[1] - a[1];
+      const len = Math.hypot(dx, dz);
+      const nx = -dz / len, nz = dx / len;
+
+      const startV = vertBase;
+      // 8 verts（內外都加寬）：
+      // 0/4: inner-bot (cell - inset, yCorBot), 1/5: inner-top (cell - inset, yCorTop)
+      // 2/6: outer-top (cell + bulge, yCorTop), 3/7: outer-bot (cell + bulge, yCorBot)
+      positions.push(
+        iA.x, yCorBot, iA.z,    // 0 inner-bot-A
+        iA.x, yCorTop, iA.z,    // 1 inner-top-A
+        cA.x, yCorTop, cA.z,    // 2 outer-top-A
+        cA.x, yCorBot, cA.z,    // 3 outer-bot-A
+        iB.x, yCorBot, iB.z,    // 4 inner-bot-B
+        iB.x, yCorTop, iB.z,    // 5 inner-top-B
+        cB.x, yCorTop, cB.z,    // 6 outer-top-B
+        cB.x, yCorBot, cB.z,    // 7 outer-bot-B
+      );
+      for (let k = 0; k < 8; k++) normals.push(nx, 0, nz);
+      pushVert(AO_WALL_CORNER); pushVert(AO_WALL_MID); pushVert(AO_WALL_MID); pushVert(AO_WALL_CORNER);
+      pushVert(AO_WALL_CORNER); pushVert(AO_WALL_MID); pushVert(AO_WALL_MID); pushVert(AO_WALL_CORNER);
+      vertBase += 8;
+
+      // Front face (vertical at outer): (3,7,6)(3,6,2) → 外向 +n 法線
+      indices.push(startV + 3, startV + 7, startV + 6);
+      indices.push(startV + 3, startV + 6, startV + 2);
+      // Bottom soffit: (0,4,7)(0,7,3) → −y 法線
+      indices.push(startV + 0, startV + 4, startV + 7);
+      indices.push(startV + 0, startV + 7, startV + 3);
+      // Top ledge: (1,2,6)(1,6,5) → +y 法線（紅磚 rim 頂面，從上方看見）
+      indices.push(startV + 1, startV + 2, startV + 6);
+      indices.push(startV + 1, startV + 6, startV + 5);
+      // Inner face (vertical at inner): (0,1,5)(0,5,4) → 內向法線（從 cell 內看見的 rim 內側面）
+      indices.push(startV + 0, startV + 1, startV + 5);
+      indices.push(startV + 0, startV + 5, startV + 4);
+    }
+  }
+
+  if (!indices.length) return;
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geom.setIndex(indices);
+  geom.computeBoundingSphere();
+
+  // 共用 buildingMaterial → 享有 shader 的 brick pattern
+  foundationCornicesMesh = new THREE.Mesh(geom, buildingMaterial);
+  foundationCornicesMesh.castShadow = true;
+  foundationCornicesMesh.receiveShadow = true;
+  cornicesGroup.add(foundationCornicesMesh);
+}
+
 function refreshDecorations() {
   rebuildBuildings();
   buildBaseGridLines();
-  buildWindows();
-  buildDoors();
+  buildDoors();              // 先建門 → 填入 doorWalls
+  buildWindows();            // 再建窗 → 讀取 doorWalls 避開門牆
+  buildRailings();           // 沿地基外圍包覆鑄鐵欄杆
+  buildWaterFoam();          // 地基外圍水面泡沫光暈
+  buildFoundationFloors();   // 地基頂面（獨立 mesh）
+  buildFoundationCornices(); // 地基 cornice 紅磚帶（獨立 mesh，避開 subdivision 收縮）
 }
 
 // ===== 裝飾刷新節流：連點放方塊時合併到下一個 RAF =====
@@ -990,8 +1522,12 @@ function scheduleDecorRefresh() {
   requestAnimationFrame(() => {
     _decorPending = false;
     buildBaseGridLines();
+    buildDoors();              // 順序與 refreshDecorations 一致
     buildWindows();
-    buildDoors();
+    buildRailings();
+    buildWaterFoam();
+    buildFoundationFloors();
+    buildFoundationCornices();
   });
 }
 
@@ -1026,25 +1562,68 @@ function injectBlockShader(mat) {
        vec3 fdyW = dFdy(vWPos);
        vec3 wN = normalize(cross(fdxW, fdyW));
 
-       // === 屋頂：交錯排列圓點瓦片 ===
+       // 地基範圍（須與 JS FOUNDATION_TOP_Y=0.3 一致）
+       const float FOUNDATION_TOP = 0.3;
+
+       // ===== 朝上的水平面 =====
        float roofW = smoothstep(0.25, 0.55, wN.y);
        if (roofW > 0.0) {
-         vec2 t = vWPos.xz * uTileScale;
-         // 每隔一行橫向偏移半格，做出磚面般的錯位
-         if (mod(floor(t.y), 2.0) > 0.5) t.x += 0.5;
-         vec2 local = fract(t) - 0.5;
-         float d = length(local);
-         float dot = smoothstep(0.44, 0.28, d);
-         diffuseColor.rgb *= (1.0 - dot * uTileStrength * roofW);
+         if (vWPos.y < 0.5) {
+           // 地基頂面 + cornice 頂緣：方塊磚地板 grid
+           vec2 t = vWPos.xz * 2.8;
+           vec2 local = fract(t);
+           float gapX = smoothstep(0.0, 0.045, local.x) * smoothstep(1.0, 0.955, local.x);
+           float gapY = smoothstep(0.0, 0.045, local.y) * smoothstep(1.0, 0.955, local.y);
+           float tile = gapX * gapY;
+           vec2 tileId = floor(t);
+           float bright = 0.80 + fract(sin(dot(tileId, vec2(12.9898, 78.233))) * 43758.5453) * 0.32;
+           diffuseColor.rgb *= mix(0.62, bright, tile);
+         } else {
+           // 樓層屋頂：圓點瓦片（既有）
+           vec2 t = vWPos.xz * uTileScale;
+           if (mod(floor(t.y), 2.0) > 0.5) t.x += 0.5;
+           vec2 local = fract(t) - 0.5;
+           float d = length(local);
+           float dotVal = smoothstep(0.44, 0.28, d);
+           diffuseColor.rgb *= (1.0 - dotVal * uTileStrength * roofW);
+         }
        }
 
-       // === 牆面：水平細條紋（木板/磚縫感） ===
+       // ===== 垂直面（牆面）=====
        float wallW = smoothstep(0.30, 0.12, abs(wN.y));
        if (wallW > 0.0) {
-         float stripe = fract(vWPos.y * uPlankScale);
-         // 靠近每個整數位置壓暗（板與板之間的縫）
-         float gap = smoothstep(0.0, 0.06, stripe) * smoothstep(1.0, 0.94, stripe);
-         diffuseColor.rgb *= (1.0 - (1.0 - gap) * uPlankStrength * wallW);
+         if (vWPos.y < FOUNDATION_TOP) {
+           // 地基牆 + cornice 紅帶：柔化的不規則磚石紋路
+           // 用 (wN.z, 0, -wN.x) 作水平切向 → 沿牆面方向取座標，與 x/z 對齊
+           vec3 horizT = vec3(wN.z, 0.0, -wN.x);
+           float horizCoord = dot(vWPos, horizT);
+           float brickH = 0.16;
+           float brickW = 0.32;
+           float row = floor(vWPos.y / brickH);
+           float rowOffset = mod(row, 2.0) * 0.5;
+           float xLocal = fract(horizCoord / brickW + rowOffset);
+           float yLocal = fract(vWPos.y / brickH);
+           // 細的 mortar 線：更窄但更銳利 → 平滑表面 + 清晰磚塊邊界
+           float gapX2 = smoothstep(0.0, 0.028, xLocal) * smoothstep(1.0, 0.972, xLocal);
+           float gapY2 = smoothstep(0.0, 0.032, yLocal) * smoothstep(1.0, 0.968, yLocal);
+           float gap = gapX2 * gapY2;
+           // 磚塊亮度：壓縮變化幅度 → 整體更平滑，不會「斑駁」
+           float brickId = floor(horizCoord / brickW + rowOffset) * 13.0 + row * 7.31;
+           float bright = 0.92 + fract(sin(brickId * 12.9898) * 43758.5453) * 0.16;
+           // Mortar 變淡（0.72）而非變深（0.48），整體不會壓暗
+           diffuseColor.rgb *= mix(0.72, bright, gap);
+
+           // === 水線白帶：在水面附近混入淡白色，與外側 foam 連成一氣 ===
+           // 須與 JS WATER_Y=-0.8 一致
+           const float WATER_Y_S = -0.8;
+           float waterlineBlend = smoothstep(0.08, 0.0, abs(vWPos.y - WATER_Y_S));
+           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.95, 0.98), waterlineBlend * 0.45);
+         } else {
+           // 樓層牆：水平木板紋（既有）
+           float stripe = fract(vWPos.y * uPlankScale);
+           float gap = smoothstep(0.0, 0.06, stripe) * smoothstep(1.0, 0.94, stripe);
+           diffuseColor.rgb *= (1.0 - (1.0 - gap) * uPlankStrength * wallW);
+         }
        }
       `
     );
@@ -1072,6 +1651,8 @@ const ROOF_OVERHANG = 0.12;
 const EAVE_DROOP = 0.02;
 const WALL_BULGE = 0.045;
 const ROOF_COLOR_INDICES = [1, 2, 11];   // PALETTE: 紅/橙/棕
+// 注意：Townscaper 地基常數（FOUNDATION_STONE_COLOR、CORNICE_*、RAILING_*）
+// 必須在檔案頂端宣告，因為 _railingPostGeom 等在更上方就用到了。
 const AO_WALL_CORNER = 0.72;
 const AO_WALL_MID = 0.98;
 const AO_TOP_CENTER = 1.0;
@@ -1114,7 +1695,11 @@ function rebuildBuildingMesh(bid) {
 
     for (let lvl = 0; lvl < cell.blocks.length; lvl++) {
       const block = cell.blocks[lvl];
-      const wallColor = new THREE.Color(PALETTE[block.color]);
+      // 地基 (lvl=0) 強制使用石頭色，忽略 block.color；樓層 (lvl>=1) 才用玩家配色
+      // → Townscaper 概念：地基是環境平台，不是房屋的一部分
+      const wallColor = lvl === 0
+        ? new THREE.Color(FOUNDATION_STONE_COLOR)
+        : new THREE.Color(PALETTE[block.color]);
       const lh = ((cell.id * 7919 + lvl * 6427) >>> 0);
       const tint = [
         baseTint[0] * (1 + (((lh & 0x7F) / 127) - 0.5) * 0.04),
@@ -1132,6 +1717,14 @@ function rebuildBuildingMesh(bid) {
         ao * tint[1] * roofColor.g,
         ao * tint[2] * roofColor.b,
       );
+      // 地基頂面 tan 色（提到此處共用 → cornice inner-top 也能用 pushFloor，
+      // 與地面 perimeter 在同位置同顏色 → mergeVertices 自動合併）
+      const floorTileColorObj = new THREE.Color(FOUNDATION_TOP_COLOR);
+      const pushFloor = (ao) => colors.push(
+        ao * tint[0] * floorTileColorObj.r,
+        ao * tint[1] * floorTileColorObj.g,
+        ao * tint[2] * floorTileColorObj.b,
+      );
 
       // 高度：lvl=0 是地基（從水下底到 FOUNDATION_TOP_Y），lvl≥1 是樓層 (BLOCK_HEIGHT)
       const y0 = blockBottomY(lvl);
@@ -1139,7 +1732,61 @@ function rebuildBuildingMesh(bid) {
       const isTop = lvl === cell.blocks.length - 1;
       const isFoundation = lvl === 0;
 
-      // 牆面：3×3 細分，中央外推
+      // === 屋頂底 (roof base)：先算好供牆頂與 roof fan 共用 ===
+      // 把 boundary 屋簷外推 / interior 抬升 / blocked 齊牆頂 三種邏輯抽到此處一次運算，
+      // 然後牆頂直接走到 roof base → 牆 / 屋簷 / 屋頂三者完全無縫，不會有透明空洞
+      let roofBase = null;
+      if (isTop && !isFoundation) {
+        roofBase = new Array(N);
+        for (let k = 0; k < N; k++) {
+          const vidx = cell.vertIdx[k];
+          const regionKey = `${bid}_${lvl}_${vidx}`;
+          const w = vertexHeightWeight.get(regionKey) ?? 0;
+          const isStrictBoundary = vertexIsRegionBoundary.has(regionKey);
+          let px = verts[k][0], pz = verts[k][1], py;
+          if (isStrictBoundary) {
+            // 沿未被較高鄰格阻擋的邊推屋簷（Bug 3 修正）
+            let nxSum = 0, nzSum = 0;
+            let blockedCount = 0;
+            const edgeIndices = [k, (k - 1 + N) % N];
+            for (const ei of edgeIndices) {
+              const nb = cell.neighbors[ei];
+              const blocking = nb !== null && cells[nb].blocks.length > lvl + 1;
+              if (blocking) { blockedCount++; continue; }
+              const ea = verts[ei];
+              const eb = verts[(ei + 1) % N];
+              const edx = eb[0] - ea[0];
+              const edz = eb[1] - ea[1];
+              const elen2 = Math.hypot(edx, edz);
+              if (elen2 > 1e-6) {
+                nxSum += -edz / elen2;
+                nzSum +=  edx / elen2;
+              }
+            }
+            const nlen = Math.hypot(nxSum, nzSum);
+            if (nlen > 1e-4 && blockedCount < 2) {
+              px += (nxSum / nlen) * ROOF_OVERHANG;
+              pz += (nzSum / nlen) * ROOF_OVERHANG;
+              py = y1 - EAVE_DROOP;
+            } else {
+              py = y1;
+            }
+          } else {
+            py = y1 + w * ROOF_HEIGHT;
+          }
+          roofBase[k] = { x: px, y: py, z: pz, w };
+        }
+      }
+
+      // 牆面：3×4 細分（4 rows）含「anchor row」緊鄰頂部
+      // 為什麼用 4 rows：原 3-row 設計下，Loop subdivision boundary rule 把牆頂角拉向 row 1 (ym)，
+      //   導致頂角下沉 ~9~15cm（出現 V 形缺口）。加 row 2 在 y1-0.04 處，使 boundary rule 的
+      //   prev/next 兩鄰居都接近 y1 → 頂角幾乎不動（drop < 1cm）
+      // Row 0 (bottom):    y0, 100% flare for foundation
+      // Row 1 (lower-mid): 50% flare, y in between
+      // Row 2 (upper-mid / anchor): 10% flare, y = top - ANCHOR_OFFSET (緊鄰頂)
+      // Row 3 (top):       0% flare, y = y1 (or roofBase for top level)
+      const ANCHOR_OFFSET = 0.04;
       for (let i = 0; i < N; i++) {
         const nei = cell.neighbors[i];
         if (nei !== null && cells[nei].blocks[lvl]) continue;
@@ -1149,33 +1796,113 @@ function rebuildBuildingMesh(bid) {
         const dx = bx - ax, dz = bz - az;
         const len = Math.hypot(dx, dz);
         const nx = -dz / len, nz = dx / len;
-        const ym = (y0 + y1) / 2;
-        // 地基不外推（牆很高，bulge 在水面附近會看起來變形），樓層才用 pudding 效果
+
+        // === Row 3 (top)：cell corner OR roofBase ===
+        let topAx = ax, topAy = y1, topAz = az;
+        let topBx = bx, topBy = y1, topBz = bz;
+        let topMx = mx, topMy = y1, topMz = mz;
+        if (roofBase) {
+          const rA = roofBase[i];
+          const rB = roofBase[(i + 1) % N];
+          topAx = rA.x; topAy = rA.y; topAz = rA.z;
+          topBx = rB.x; topBy = rB.y; topBz = rB.z;
+          topMx = (topAx + topBx) / 2;
+          topMy = (topAy + topBy) / 2;
+          topMz = (topAz + topBz) / 2;
+        }
+
+        // === Foundation flare lookup（地基 4 排都用同方向不同強度）===
+        let flareA = null, flareB = null;
+        if (isFoundation) {
+          flareA = foundationBaseFlare.get(cell.vertIdx[i]);
+          flareB = foundationBaseFlare.get(cell.vertIdx[(i + 1) % N]);
+        }
+
+        // === Row 2 (anchor)：y = top - ANCHOR_OFFSET ===
+        // 用 ORIGINAL ax/az（cell corner）作參考，搭 10% flare
+        let anchAx = ax, anchAy = topAy - ANCHOR_OFFSET, anchAz = az;
+        let anchBx = bx, anchBy = topBy - ANCHOR_OFFSET, anchBz = bz;
+        let anchMx = mx, anchMy = (anchAy + anchBy) / 2, anchMz = mz;
+        if (flareA && flareB) {
+          const t = 0.10;   // 10% flare
+          anchAx = ax * (1 - t) + flareA.x * t;
+          anchAz = az * (1 - t) + flareA.z * t;
+          anchBx = bx * (1 - t) + flareB.x * t;
+          anchBz = bz * (1 - t) + flareB.z * t;
+          anchMx = (anchAx + anchBx) / 2;
+          anchMz = (anchAz + anchBz) / 2;
+        }
+
+        // === Row 1 (lower-mid)：y = halfway between y0 and anchor ===
+        let midAx = ax, midAy = (y0 + anchAy) / 2, midAz = az;
+        let midBx = bx, midBy = (y0 + anchBy) / 2, midBz = bz;
+        let midCx = mx, midCy = (midAy + midBy) / 2, midCz = mz;
+        if (flareA && flareB) {
+          // 50% flare for mid row
+          midAx = (ax + flareA.x) / 2;
+          midAz = (az + flareA.z) / 2;
+          midBx = (bx + flareB.x) / 2;
+          midBz = (bz + flareB.z) / 2;
+          midCx = (midAx + midBx) / 2;
+          midCz = (midAz + midBz) / 2;
+        }
+
+        // === Row 0 (bottom)：full flare for foundation ===
+        let botAx = ax, botAz = az;
+        let botBx = bx, botBz = bz;
+        let botMx = mx, botMz = mz;
+        if (flareA && flareB) {
+          botAx = flareA.x; botAz = flareA.z;
+          botBx = flareB.x; botBz = flareB.z;
+          botMx = (botAx + botBx) / 2;
+          botMz = (botAz + botBz) / 2;
+        }
+
+        // === Bulge：地基不外推（牆很高），樓層才在 lower-mid row center 加 pudding ===
         const bulge = isFoundation ? 0 : Math.min(WALL_BULGE, len * 0.08);
-        const cmx = mx + nx * bulge, cmz = mz + nz * bulge;
+        const cmx = midCx + nx * bulge, cmz = midCz + nz * bulge;
+
+        // === Push 12 verts（4 rows × 3 cols）===
         positions.push(
-          ax, y0, az,   mx, y0, mz,    bx, y0, bz,
-          ax, ym, az,   cmx, ym, cmz,  bx, ym, bz,
-          ax, y1, az,   mx, y1, mz,    bx, y1, bz,
+          // Row 0 (verts 0-2): bottom
+          botAx,  y0,      botAz,    botMx, y0,      botMz,    botBx,  y0,      botBz,
+          // Row 1 (verts 3-5): lower-mid
+          midAx,  midAy,   midAz,    cmx,   midCy,   cmz,      midBx,  midBy,   midBz,
+          // Row 2 (verts 6-8): upper-mid / anchor
+          anchAx, anchAy,  anchAz,   anchMx, anchMy, anchMz,   anchBx, anchBy,  anchBz,
+          // Row 3 (verts 9-11): top
+          topAx,  topAy,   topAz,    topMx, topMy,   topMz,    topBx,  topBy,   topBz,
         );
-        for (let k = 0; k < 9; k++) normals.push(nx, 0, nz);
-        pushWall(AO_WALL_CORNER); pushWall(AO_WALL_MID); pushWall(AO_WALL_CORNER);
-        pushWall(AO_WALL_MID);    pushWall(AO_WALL_MID); pushWall(AO_WALL_MID);
-        pushWall(AO_WALL_CORNER); pushWall(AO_WALL_MID); pushWall(AO_WALL_CORNER);
+        for (let k = 0; k < 12; k++) normals.push(nx, 0, nz);
+        // AO pattern: Row 0 + Row 3 corners 偏暗，其他 mid
+        pushWall(AO_WALL_CORNER); pushWall(AO_WALL_MID); pushWall(AO_WALL_CORNER);  // Row 0
+        pushWall(AO_WALL_MID);    pushWall(AO_WALL_MID); pushWall(AO_WALL_MID);     // Row 1
+        pushWall(AO_WALL_MID);    pushWall(AO_WALL_MID); pushWall(AO_WALL_MID);     // Row 2 (anchor)
+        pushWall(AO_WALL_CORNER); pushWall(AO_WALL_MID); pushWall(AO_WALL_CORNER);  // Row 3
+        // 12 三角形（6 quads）：3 個垂直 quad pair × 2 個水平 quad
         indices.push(
+          // Row 0 → Row 1 (bot quad pair)
           vertBase + 0, vertBase + 1, vertBase + 4,   vertBase + 0, vertBase + 4, vertBase + 3,
           vertBase + 1, vertBase + 2, vertBase + 5,   vertBase + 1, vertBase + 5, vertBase + 4,
+          // Row 1 → Row 2 (mid quad pair)
           vertBase + 3, vertBase + 4, vertBase + 7,   vertBase + 3, vertBase + 7, vertBase + 6,
           vertBase + 4, vertBase + 5, vertBase + 8,   vertBase + 4, vertBase + 8, vertBase + 7,
+          // Row 2 → Row 3 (anchor quad pair, 緊鄰頂 → boundary smoothing 不會把頂角拉下)
+          vertBase + 6, vertBase + 7, vertBase + 10,  vertBase + 6, vertBase + 10, vertBase + 9,
+          vertBase + 7, vertBase + 8, vertBase + 11,  vertBase + 7, vertBase + 11, vertBase + 10,
         );
-        vertBase += 9;
+        vertBase += 12;
       }
 
-      // 最底層底面
+      // 地基底面：封住 lvl=0 的水下底（深埋於 water 之下）
+      // 底面也用 foundationBaseFlare 位置以對齊牆 bottom row
       if (lvl === 0) {
         const startV = vertBase;
         for (let i = 0; i < N; i++) {
-          positions.push(verts[i][0], 0, verts[i][1]);
+          const flare = foundationBaseFlare.get(cell.vertIdx[i]);
+          const px = flare ? flare.x : verts[i][0];
+          const pz = flare ? flare.z : verts[i][1];
+          positions.push(px, y0, pz);
           normals.push(0, -1, 0);
           pushWall(AO_BOTTOM);
         }
@@ -1185,51 +1912,47 @@ function rebuildBuildingMesh(bid) {
         }
       }
 
+      // === Cornice 紅色薄條（沿著牆頂邊緣生成）===
+      // 設計：薄高 0.05 的紅磚條緊貼牆頂，外推 0.04 形成小鑲邊
+      // 為什麼薄條：4-row 牆面 barrel 曲線在低 Y 處外推大（y=0.10 處 0.016 外推），
+      //   若 cornice 太高會與 barrel 衝突。改為只在 y=0.255~0.305 範圍（牆頂附近 wall ≤0.008 外推），
+      //   小幅外推 0.04 就能完全跳開 barrel，cornice 完全可見
+      // 「牆頂在哪 cornice 就在那」：cornice 範圍貼著 wall row 3 (y=y1) 與 row 2 (y=0.26)，
+      //   foundationCorniceBase 使用 cell 頂點計算，與 wall 共用同樣的邊形
+      //
+      // 結構（per segment, 8 verts）：
+      //   - inner-bot/top in cell perim（被外推 cornice 蓋住，從外面看不到）
+      //   - outer-bot/top in cell + CORNICE_BULGE（紅磚 band 主體）
+      // Faces：
+      //   - Front face (vertical at outer)：薄紅磚帶，從側面看
+      //   - Top ledge (horizontal at yCorTop)：花圃外緣，從上面看
+      //   - Bottom soffit (horizontal at yCorBot)：仰望時看到的屋簷底
+      // 加 +0.005 nudge 到 yCorTop 防止與 floor 在 y=y1 Z-fight
+      // Cornice 已移至獨立 mesh (buildFoundationCornices) 處理
+      // → 跳過 Loop subdivision 的 boundary 收縮，cornice 外角保留在 cell + bulge 外側
+
       // 頂面處理：
       //  - 地基為最頂層（只有地基無樓層）→ 畫「平頂蓋」，無屋頂
       //  - 樓層為最頂層 → 畫斜屋頂
       //  - 中間樓層（被上層覆蓋）→ 不畫頂
       if (isTop && isFoundation) {
-        // === 地基平頂：水平 N-2 三角扇 ===
-        const startV = vertBase;
-        for (let i = 0; i < N; i++) {
-          positions.push(verts[i][0], y1, verts[i][1]);
-          normals.push(0, 1, 0);
-          pushWall(AO_TOP_CENTER * 0.92);   // 比建築頂面稍暗，視覺像石板
-        }
-        vertBase += N;
-        // CW from above 的扇形（normal up）→ 翻轉為 CCW
-        for (let i = 1; i < N - 1; i++) {
-          indices.push(startV, startV + i, startV + i + 1);
-        }
+        // 地基平頂改由獨立的 buildFoundationFloors() 處理（不參與 Loop subdivision）
+        // → 避免 subdivision boundary 收縮造成 corner 處 0.125 寬的「凹陷缺口」
+        // 此處刻意不畫，留給 floorsGroup
       } else if (isTop) {
-        // === 樓層屋頂：斜屋頂（既有邏輯）===
+        // === 樓層屋頂：斜屋頂 ===
+        // roofBase 已在 lvl 開頭算好；這裡直接 push 頂點 + 計算 apex + 扇形 triangulation
+        // 因為牆頂也是用同一份 roofBase 算位置，二者在完全相同的世界座標接合
         const baseStart = vertBase;
         let cellMaxW = 0;
         let perimMaxY = -Infinity;
         for (let i = 0; i < N; i++) {
-          const vidx = cell.vertIdx[i];
-          const w = vertexHeightWeight.get(vidx) ?? 0;
-          if (w > cellMaxW) cellMaxW = w;
-          let px = verts[i][0], pz = verts[i][1];
-          const isStrictBoundary = vertexIsRegionBoundary.has(vidx);
-          let py;
-          if (isStrictBoundary) {
-            py = y1 - EAVE_DROOP;
-            const vdx = verts[i][0] - cx;
-            const vdz = verts[i][1] - cz;
-            const vlen = Math.hypot(vdx, vdz);
-            if (vlen > 1e-4) {
-              px += (vdx / vlen) * ROOF_OVERHANG;
-              pz += (vdz / vlen) * ROOF_OVERHANG;
-            }
-          } else {
-            py = y1 + w * ROOF_HEIGHT;
-          }
-          if (py > perimMaxY) perimMaxY = py;
-          positions.push(px, py, pz);
+          const b = roofBase[i];
+          if (b.w > cellMaxW) cellMaxW = b.w;
+          if (b.y > perimMaxY) perimMaxY = b.y;
+          positions.push(b.x, b.y, b.z);
           normals.push(0, 1, 0);
-          pushRoof(AO_ROOF_BASE + (AO_TOP_CENTER - AO_ROOF_BASE) * w);
+          pushRoof(AO_ROOF_BASE + (AO_TOP_CENTER - AO_ROOF_BASE) * b.w);
         }
         vertBase += N;
         let apexY;
@@ -1258,6 +1981,12 @@ function rebuildBuildingMesh(bid) {
   geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geom.setIndex(indices);
+
+  // 合併同位置同顏色的頂點 → subdivision 把相鄰牆共角視為連續曲面 → 角落真正圓潤
+  // 必須先刪除 normal attribute，否則牆與牆之間 normal 方向不同會阻止合併
+  // 合併條件：position 接近（tolerance 1e-4）且 color 一致（牆 vs cornice vs floor 等不同顏色不會被誤合併）
+  geom.deleteAttribute('normal');
+  geom = mergeVertices(geom, 1e-4);
 
   // Loop subdivision：1 次迭代 → 每個三角形變 4 個，邊角圓潤
   // split: false 略過 coplanar 分割（省 CPU；我們的牆已是 8 三角不需要再切）
@@ -1293,14 +2022,70 @@ function rebuildAll() {
     m.geometry.dispose();
   }
   buildingMeshes.clear();
+  // 先 refresh：refreshDecorations() 內部會 rebuildBuildings() 重算 buildingCells，
+  // 否則下面的迴圈會跑在「過時」的 buildingCells 上（首次種 demo town 時就是空的）
+  refreshDecorations();
   for (let bid = 0; bid < buildingCells.length; bid++) {
     rebuildBuildingMesh(bid);
   }
-  refreshDecorations();
 }
 
 refreshDecorations();
 buildGroundPick();
+
+// ===== 開始選單：示範小鎮（讓首頁背景有風景看）=====
+// 在中央附近隨機種一批方塊，營造「正在發生」的小鎮畫面
+function seedDemoTown(seed = 0xC0FFEE) {
+  // 簡單 LCG，種子穩定 → 同次預覽不會抖動
+  let s = seed >>> 0;
+  const rnd = () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+  // 依離中心距離排序，取最內部約一半 cell，再隨機洗牌挑一部分蓋
+  const sorted = [...cells].sort((a, b) =>
+    Math.hypot(a.center[0], a.center[1]) - Math.hypot(b.center[0], b.center[1])
+  );
+  const pool = sorted.slice(0, Math.max(8, Math.floor(cells.length * 0.45)));
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const target = Math.max(6, Math.floor(pool.length * 0.55));
+
+  for (let i = 0; i < target; i++) {
+    const c = pool[i];
+    // 避開最外圈，讓示範看起來是中央聚落
+    if (Math.hypot(c.center[0], c.center[1]) > 9) continue;
+    const color = 1 + Math.floor(rnd() * (PALETTE.length - 1));
+    // 必須連續疊（blocks 不能稀疏，否則 rebuildBuildingMesh 會炸）
+    c.blocks.push({ color });                                 // 地基
+    if (rnd() < 0.85) {
+      c.blocks.push({ color });                               // 1 樓
+      if (rnd() < 0.55) {
+        c.blocks.push({ color });                             // 2 樓
+        if (rnd() < 0.22) c.blocks.push({ color });           // 3 樓（少見）
+      }
+    }
+  }
+  rebuildAll();
+}
+
+function clearAllBlocks() {
+  for (const c of cells) c.blocks = [];
+  rebuildAll();
+}
+
+// 初始：先種一座示範小鎮供選單背景顯示
+seedDemoTown(Date.now() & 0x7FFFFFFF);
+
+// ===== 選單模式：鏡頭自動繞行 + 停用 OrbitControls =====
+let menuMode = true;
+controls.enabled = false;        // 選單模式時使用者不能拖鏡頭
+const MENU_ORBIT_RADIUS = 24;
+const MENU_ORBIT_HEIGHT = 16;
+const MENU_ORBIT_SPEED  = 0.05;  // rad/sec — 緩慢繞行
+let menuOrbitT = Math.random() * Math.PI * 2;   // 初始角度隨機
 
 // ===== 操作紀錄 =====
 const history = [];
@@ -1324,9 +2109,10 @@ function pick(x, y) {
   pointer.x = (x / window.innerWidth) * 2 - 1;
   pointer.y = -(y / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const a = raycaster.intersectObjects(cellGroup.children, false);
-  const b = raycaster.intersectObjects(groundPickGroup.children, false);
-  const all = a.concat(b);
+  const a = raycaster.intersectObjects(cellGroup.children, false);          // 牆/屋頂/cornice (in buildingMesh)
+  const b = raycaster.intersectObjects(groundPickGroup.children, false);    // 空地隱形 pick 平面
+  const c = raycaster.intersectObjects(floorsGroup.children, false);        // 地基頂面 (獨立 mesh，需納入才能在頂上疊樓)
+  const all = a.concat(b).concat(c);
   all.sort((x, y) => x.distance - y.distance);
   return all[0] || null;
 }
@@ -1387,8 +2173,8 @@ function handleClick(ev, isRight) {
   const ud = hit.object.userData;
 
   if (isRight) {
-    if (ud.type === 'column') {
-      // 移除頂層方塊：以 hit 點 xz 找最近的 cell，移除其頂層
+    // 右鍵：移除頂層方塊
+    if (ud.type === 'column' || ud.type === 'foundation_top') {
       const cellId = closestCellAt(hit.point.x, hit.point.z);
       if (cellId >= 0) removeTopBlock(cellId);
     }
@@ -1397,6 +2183,12 @@ function handleClick(ev, isRight) {
 
   if (ud.type === 'ground') {
     addBlock(ud.cellId, 0);
+    return;
+  }
+  // 左鍵點擊地基頂面 → 在該 cell 上疊樓層
+  if (ud.type === 'foundation_top') {
+    const cellId = closestCellAt(hit.point.x, hit.point.z);
+    if (cellId >= 0) addBlock(cellId, cells[cellId].blocks.length);
     return;
   }
   if (ud.type === 'column') {
@@ -1449,6 +2241,9 @@ function updateCursorInfo(ev, hit) {
   if (ud.type === 'ground') {
     cellId = ud.cellId;
     action = cells[cellId]?.blocks.length ? `疊第 ${cells[cellId].blocks.length} 層` : '建地基';
+  } else if (ud.type === 'foundation_top') {
+    cellId = closestCellAt(hit.point.x, hit.point.z);
+    if (cellId >= 0) action = `疊第 ${cells[cellId].blocks.length} 層`;
   } else if (ud.type === 'column') {
     const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
     if (n && n.y > 0.5) {
@@ -1499,6 +2294,10 @@ function showHover(hit) {
   if (ud.type === 'ground') {
     cellId = ud.cellId;
     yBottom = 0;
+  } else if (ud.type === 'foundation_top') {
+    // 地基頂面：在該 cell 上疊樓層
+    cellId = closestCellAt(hit.point.x, hit.point.z);
+    if (cellId >= 0) yBottom = cellTopY(cells[cellId]);
   } else if (ud.type === 'column') {
     // per-building mesh：用 hit 法線判斷頂面 / 側面，再用 closest-cell 推 cellId
     const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
@@ -1551,7 +2350,10 @@ function showHover(hit) {
   geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   geom.setIndex(indices);
   geom.computeBoundingSphere();
-  const col = new THREE.Color(PALETTE[currentColor]);
+  // 地基永遠石色（不受 currentColor 影響），讓 ghost 與實際結果一致
+  const col = isFoundationPlacement
+    ? new THREE.Color(FOUNDATION_STONE_COLOR)
+    : new THREE.Color(PALETTE[currentColor]);
   const mat = new THREE.MeshStandardMaterial({
     color: col,
     transparent: true,
@@ -1681,25 +2483,223 @@ window.addEventListener('resize', () => {
   if (composer) composer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// ===== 開始選單按鈕串接 =====
+const startScreenEl = document.getElementById('start-screen');
+const modalHowto = document.getElementById('modal-howto');
+const modalAbout = document.getElementById('modal-about');
+
+function openModal(el) { el.classList.remove('hidden'); }
+function closeModal(el) { el.classList.add('hidden'); }
+
+// 「開始建造」：清除示範小鎮 → 淡出選單 → 啟用控制
+document.getElementById('btn-start').addEventListener('click', () => {
+  if (!menuMode) return;
+  clearAllBlocks();
+  history.length = 0;
+  startScreenEl.classList.add('hidden');
+  document.body.classList.remove('menu-active');
+  // 等淡出動畫進行中順便把鏡頭過渡到玩家視角
+  menuMode = false;
+  controls.enabled = true;
+  // 給一個友善的初始視角（與 camera.position.set 初值一致）
+  camera.position.set(22, 18, 22);
+  controls.target.set(0, 1, 0);
+  desiredTarget.set(0, 1, 0);
+  updateFocus();
+});
+
+// 「換一座島」：重新生成地圖 + 示範小鎮，停留在選單模式
+document.getElementById('btn-shuffle').addEventListener('click', async () => {
+  document.getElementById('loading').classList.remove('hidden');
+  await new Promise(r => setTimeout(r, 20));
+  cells = generateGrid(12, Math.random());
+  buildVertexToCells();
+  history.length = 0;
+  for (const m of buildingMeshes.values()) {
+    cellGroup.remove(m);
+    m.geometry.dispose();
+  }
+  buildingMeshes.clear();
+  refreshDecorations();
+  buildGroundPick();
+  seedDemoTown(Date.now() & 0x7FFFFFFF);
+  document.getElementById('loading').classList.add('hidden');
+});
+
+document.getElementById('btn-howto').addEventListener('click', () => openModal(modalHowto));
+document.getElementById('btn-about').addEventListener('click', () => openModal(modalAbout));
+
+// ===== 專案技術介紹頁（PROJECT INFO）=====
+const infoScreen = document.getElementById('info-screen');
+let infoRevealObserver = null;
+
+function openInfo() {
+  infoScreen.classList.remove('hidden');
+  infoScreen.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('info-open');
+  // 重置：再次開啟時清掉舊的 .is-revealed，讓動畫再播一次
+  infoScreen.querySelectorAll('[data-reveal].is-revealed')
+            .forEach(el => el.classList.remove('is-revealed'));
+  // 等下一個 frame 讓 visibility 切換完成、layout 穩定，再啟動 reveal 與 observer
+  requestAnimationFrame(() => {
+    infoScreen.scrollTop = 0;
+    revealVisibleNow();           // 立即把目前在 viewport 內的元素揭露
+    startInfoObserver();          // 之後 scroll 觸發剩餘元素
+  });
+}
+function closeInfo() {
+  infoScreen.classList.add('hidden');
+  infoScreen.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('info-open');
+  // 銷毀 observer，下次開啟重建
+  if (infoRevealObserver) {
+    infoRevealObserver.disconnect();
+    infoRevealObserver = null;
+  }
+}
+
+document.getElementById('btn-info').addEventListener('click', openInfo);
+infoScreen.querySelectorAll('[data-info-close]').forEach(el =>
+  el.addEventListener('click', closeInfo)
+);
+
+// 立即揭露：把目前在 viewport 內的 [data-reveal] 加 .is-revealed
+// 用 setTimeout stagger 製造由上而下的進場節奏（hero 統計卡卡片之間錯開 80ms）
+function revealVisibleNow() {
+  const targets = Array.from(infoScreen.querySelectorAll('[data-reveal]'));
+  const vh = window.innerHeight;
+  let stagger = 0;
+  for (const el of targets) {
+    const rect = el.getBoundingClientRect();
+    if (rect.top < vh - 40) {                   // 在 viewport 內或臨界外緣
+      setTimeout(() => el.classList.add('is-revealed'), stagger);
+      stagger += 70;
+    }
+  }
+}
+
+// IntersectionObserver：負責 scroll 後段的 reveal（hero 之後 scroll 到才看見的卡片）
+function startInfoObserver() {
+  if (infoRevealObserver) return;
+  infoRevealObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting && !e.target.classList.contains('is-revealed')) {
+        e.target.classList.add('is-revealed');
+        infoRevealObserver.unobserve(e.target);
+      }
+    }
+  }, {
+    root: infoScreen,
+    threshold: 0.1,
+    rootMargin: '0px 0px -60px 0px',
+  });
+  infoScreen.querySelectorAll('[data-reveal]:not(.is-revealed)')
+            .forEach(el => infoRevealObserver.observe(el));
+}
+
+// Modal 關閉：✕ 按鈕 / 點背景 / Esc
+document.querySelectorAll('[data-close]').forEach(b => {
+  b.addEventListener('click', () => closeModal(b.closest('.modal')));
+});
+[modalHowto, modalAbout].forEach(m => {
+  m.addEventListener('click', (ev) => {
+    if (ev.target === m) closeModal(m);   // 點到背景才關，點到卡片內不關
+  });
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') {
+    // 由內向外關：modal > info-screen
+    if (!modalHowto.classList.contains('hidden')) closeModal(modalHowto);
+    else if (!modalAbout.classList.contains('hidden')) closeModal(modalAbout);
+    else if (!infoScreen.classList.contains('hidden')) closeInfo();
+  }
+});
+
+// 「回到選單」：保留現有建築物當作下次預覽
+document.getElementById('btn-back-menu').addEventListener('click', () => {
+  if (menuMode) return;
+  menuMode = true;
+  controls.enabled = false;
+  document.body.classList.add('menu-active');
+  startScreenEl.classList.remove('hidden');
+  setMenuActive(-1);   // 重置鍵盤選中狀態
+});
+
+// ===== 選單鍵盤導航 =====
+// ↑/↓ 移動高亮、Enter / Space 觸發、滑鼠移入會讓位（避免鍵盤與 hover 雙重高亮）
+const menuItemsEls = Array.from(document.querySelectorAll('#start-menu-buttons .menu-item'));
+let menuActiveIdx = -1;   // -1 = 無預設選中
+
+function setMenuActive(idx) {
+  menuActiveIdx = idx;
+  menuItemsEls.forEach((el, i) => {
+    if (i === idx) el.setAttribute('data-active', '');
+    else el.removeAttribute('data-active');
+  });
+}
+
+// 滑鼠進入任一項 → 清掉鍵盤選中（hover 接手高亮）
+menuItemsEls.forEach(el => {
+  el.addEventListener('pointerenter', () => {
+    if (menuActiveIdx >= 0) setMenuActive(-1);
+  });
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (!menuMode) return;
+  // 有 modal 開著 → Esc 由原本 handler 處理，箭頭/Enter 不要動
+  if (!modalHowto.classList.contains('hidden') || !modalAbout.classList.contains('hidden')) return;
+
+  if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    setMenuActive(menuActiveIdx < 0 ? 0 : (menuActiveIdx + 1) % menuItemsEls.length);
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    setMenuActive(menuActiveIdx <= 0 ? menuItemsEls.length - 1 : menuActiveIdx - 1);
+  } else if (ev.key === 'Enter' || ev.key === ' ') {
+    if (menuActiveIdx >= 0) {
+      ev.preventDefault();
+      menuItemsEls[menuActiveIdx].click();
+    }
+  }
+});
+
 // ===== 主迴圈 =====
 function animate() {
   requestAnimationFrame(animate);
-  // 平滑追焦：camera 與 target 一起平移，保留使用者當前視角
-  const dx = desiredTarget.x - controls.target.x;
-  const dy = desiredTarget.y - controls.target.y;
-  const dz = desiredTarget.z - controls.target.z;
-  if (dx * dx + dy * dy + dz * dz > 1e-5) {
-    const k = 0.08;  // lerp 係數：~0.5s 收斂到目標
-    const mx = dx * k, my = dy * k, mz = dz * k;
-    controls.target.x += mx;
-    controls.target.y += my;
-    controls.target.z += mz;
-    camera.position.x += mx;
-    camera.position.y += my;
-    camera.position.z += mz;
+
+  if (menuMode) {
+    // 選單模式：鏡頭緩慢繞著小鎮中心轉
+    menuOrbitT += MENU_ORBIT_SPEED * (1 / 60);
+    const angle = menuOrbitT;
+    camera.position.set(
+      Math.cos(angle) * MENU_ORBIT_RADIUS,
+      MENU_ORBIT_HEIGHT,
+      Math.sin(angle) * MENU_ORBIT_RADIUS,
+    );
+    controls.target.set(0, 2, 0);
+    camera.lookAt(controls.target);
+    // 同步 desiredTarget，離開選單時不會被舊值拉回
+    desiredTarget.set(0, 1, 0);
+  } else {
+    // 編輯模式：平滑追焦
+    const dx = desiredTarget.x - controls.target.x;
+    const dy = desiredTarget.y - controls.target.y;
+    const dz = desiredTarget.z - controls.target.z;
+    if (dx * dx + dy * dy + dz * dz > 1e-5) {
+      const k = 0.08;  // lerp 係數：~0.5s 收斂到目標
+      const mx = dx * k, my = dy * k, mz = dz * k;
+      controls.target.x += mx;
+      controls.target.y += my;
+      controls.target.z += mz;
+      camera.position.x += mx;
+      camera.position.y += my;
+      camera.position.z += mz;
+    }
+    controls.update();
+    updateGhost();
   }
-  controls.update();
-  updateGhost();
+
   const _t = performance.now() * 0.001;
   if (skyMaterial) skyMaterial.uniforms.uTime.value = _t;
   if (composer) composer.render(); else renderer.render(scene, camera);

@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="menu-active">
 <div id="app"></div>
 <div id="loading">正在產生地圖…</div>
 <div id="cursor-info"></div>
@@ -17,6 +17,7 @@
   <button class="btn" id="btn-undo">↶ 復原</button>
   <button class="btn" id="btn-clear">🗑 全部清除</button>
   <button class="btn" id="btn-regen">🎲 重新生成地圖</button>
+  <button class="btn" id="btn-back-menu">⌂ 回到選單</button>
 </div>
 
 <div id="help">
@@ -28,6 +29,270 @@
   <div>🖱 <b>滾輪</b>：縮放</div>
   <div>⌨ <b>1-9, 0</b>：切換顏色</div>
   <div>⌨ <b>⌘Z / Ctrl+Z</b>：復原</div>
+</div>
+
+<!-- 開始畫面：cinematic 左側漸層黑底（遊戲畫面從右側透出） -->
+<div id="start-screen">
+  <!-- 四個角落 + 標記 -->
+  <span class="corner-mark tl">+</span>
+  <span class="corner-mark tr">+</span>
+  <span class="corner-mark bl">+</span>
+  <span class="corner-mark br">+</span>
+
+  <!-- 頂角文字 -->
+  <div id="start-topline">THE QUIET TIDE NEVER STOPS</div>
+
+  <!-- 左側主內容 -->
+  <div id="start-content">
+    <h1 id="start-title">小鎮建築師</h1>
+    <div id="start-subtitle">A SMALL TOWN ON A FLOATING ISLAND, BUILT BLOCK BY BLOCK&nbsp;&nbsp;→</div>
+
+    <nav id="start-menu-buttons">
+      <button class="menu-item" id="btn-start">
+        <span class="menu-box"></span>
+        <span class="menu-label">START</span>
+      </button>
+      <button class="menu-item" id="btn-shuffle">
+        <span class="menu-box"></span>
+        <span class="menu-label">SHUFFLE&nbsp;ISLAND</span>
+      </button>
+      <button class="menu-item" id="btn-howto">
+        <span class="menu-box"></span>
+        <span class="menu-label">HOW&nbsp;TO&nbsp;PLAY</span>
+      </button>
+      <button class="menu-item" id="btn-info">
+        <span class="menu-box"></span>
+        <span class="menu-label">PROJECT&nbsp;INFO</span>
+      </button>
+      <button class="menu-item space-above" id="btn-about">
+        <span class="menu-box"></span>
+        <span class="menu-label">ABOUT</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- 底部左右 -->
+  <div id="start-footer-left">© 2026 · ANIMATION PROGRAMMING COURSE</div>
+  <div id="start-footer-right">INSPIRED BY TOWNSCAPER · BUILT WITH THREE.JS&nbsp;&nbsp;→</div>
+</div>
+
+<!-- 操作說明 / 關於 浮層 -->
+<div id="modal-howto" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>📖 操作說明</h2>
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="kbd-row"><b>左鍵點擊空地</b><span>建造地基（第一階段）</span></div>
+      <div class="kbd-row"><b>左鍵點擊建築頂面</b><span>往上疊一層樓</span></div>
+      <div class="kbd-row"><b>左鍵點擊建築側牆</b><span>在鄰格放方塊</span></div>
+      <div class="kbd-row"><b>右鍵點擊</b><span>移除頂層方塊</span></div>
+      <div class="kbd-row"><b>左鍵拖曳</b><span>旋轉視角</span></div>
+      <div class="kbd-row"><b>中鍵拖曳</b><span>平移畫面</span></div>
+      <div class="kbd-row"><b>滾輪</b><span>縮放鏡頭</span></div>
+      <div class="kbd-row"><b>數字鍵 1–9, 0</b><span>切換顏色</span></div>
+      <div class="kbd-row"><b>⌘Z / Ctrl + Z</b><span>復原上一步</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- 專案技術介紹頁（fullscreen 滾動 overlay）-->
+<div id="info-screen" class="hidden" aria-hidden="true">
+  <div class="info-topbar">
+    <div class="info-brand">+ &nbsp;BLOCKTOWN · PROJECT BRIEF</div>
+    <button class="info-close" data-info-close>← BACK TO MENU</button>
+  </div>
+
+  <main class="info-main">
+
+    <!-- HERO -->
+    <section class="info-hero" data-reveal>
+      <p class="info-eyebrow">ANIMATION PROGRAMMING COURSE · 2026 FINAL</p>
+      <h1 class="info-headline">在<span>不規則格網</span>上，蓋一座<span>奶油色小鎮</span></h1>
+      <p class="info-text">Blocktown 是一個瀏覽器 3D 建築玩具，受 Oskar Stålberg 的 Townscaper 啟發。透過 Delaunay 三角剖分產生不規則格網地形、Loop subdivision 圓潤化建築、自訂 GLSL Shader 模擬天空與水面，整體在 60fps 即時運算。</p>
+
+      <div class="info-stats">
+        <article class="info-stat" data-tone="cream" data-reveal>
+          <span class="info-stat__label">QUAD CELLS</span>
+          <p class="info-stat__value">441</p>
+          <small>radius = 12 格網規模 · 100% quad</small>
+        </article>
+        <article class="info-stat" data-tone="orange" data-reveal>
+          <span class="info-stat__label">PALETTE</span>
+          <p class="info-stat__value">14</p>
+          <small>奶米北歐色票 · 程序產生 tint</small>
+        </article>
+        <article class="info-stat" data-tone="red" data-reveal>
+          <span class="info-stat__label">SHADER LAYERS</span>
+          <p class="info-stat__value">×4</p>
+          <small>天空 · 水面 · 瓦片 · 木紋</small>
+        </article>
+      </div>
+    </section>
+
+    <!-- 核心特色 -->
+    <section class="info-section" data-reveal>
+      <h2 class="info-h2">核心特色</h2>
+      <div class="info-features">
+        <article class="info-card" data-tone="cream" data-reveal>
+          <div class="info-card__index">01 · GENERATION</div>
+          <h3>程序生成地形</h3>
+          <p>從 Square grid 出發，配上圓形 mask、雙層 sine 波 curve distortion、shape-aware smoothing，產出邊長近等距、外輪廓圓潤的 100% quad 格網。</p>
+          <div class="info-card__chips">
+            <span>Square Grid</span><span>Curve Distortion</span><span>Jitter</span><span>Smoothing</span>
+          </div>
+        </article>
+        <article class="info-card" data-tone="orange" data-reveal>
+          <div class="info-card__index">02 · RENDER</div>
+          <h3>Townscaper 風渲染</h3>
+          <p>每棟建築合併幾何後跑 Loop subdivision 圓潤化；vertex colors 烤入牆面與屋頂；onBeforeCompile 注入瓦片圓點與水平木紋；屋頂依鄰格自動形成 dome / gable。</p>
+          <div class="info-card__chips">
+            <span>Vertex Colors</span><span>Loop Subdivision</span><span>Procedural Shader</span>
+          </div>
+        </article>
+        <article class="info-card" data-tone="red" data-reveal>
+          <div class="info-card__index">03 · INTERACT</div>
+          <h3>互動式建造</h3>
+          <p>兩階段建造（地基 + 樓層）、Raycaster 點擊偵測、3D 半透明 ghost 預覽、滑鼠 hover tooltip 顯示 cell 資訊、無限 Undo 與平滑追焦鏡頭。</p>
+          <div class="info-card__chips">
+            <span>Raycaster</span><span>Hover Ghost</span><span>Undo Stack</span><span>Smooth Focus</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 技術堆疊 -->
+    <section class="info-section" data-reveal>
+      <h2 class="info-h2">技術堆疊</h2>
+      <div class="info-media-wall">
+        <article class="info-media" data-reveal>
+          <h4>THREE.JS 0.160</h4>
+          <p>3D 渲染核心 — WebGL、PCF 軟陰影、ACES Filmic Tonemapping、OrbitControls、PerspectiveCamera。</p>
+        </article>
+        <article class="info-media" data-reveal>
+          <h4>DELAUNATOR 5</h4>
+          <p>不規則格網生成輔助：Delaunay 三角剖分演算法，本作改用 square grid + jitter，但仍保留 utility 給後續實驗。</p>
+        </article>
+        <article class="info-media" data-reveal>
+          <h4>THREE-SUBDIVIDE</h4>
+          <p>Loop subdivision 實作：每個三角形分成 4 個並做 smoothing，把硬邊的 block geometry 圓潤成 Townscaper 風的 puffy 形狀。</p>
+        </article>
+        <article class="info-media" data-reveal>
+          <h4>GLSL SHADER</h4>
+          <p>四套自訂 shader — 天空漸層球 + FBM 雲、徑向漸層水面、屋頂瓦片圓點 dot、牆面水平條紋。</p>
+        </article>
+        <article class="info-media" data-reveal>
+          <h4>POST-PROCESSING</h4>
+          <p>EffectComposer + UnrealBloomPass：strength 0.35 / threshold 0.85 的微暈光，增加溫暖夢幻感。</p>
+        </article>
+        <article class="info-media" data-reveal>
+          <h4>ES MODULE + IMPORT MAP</h4>
+          <p>零 build：純原生 ES Module 從 CDN 載入；只要靜態 server 就能跑，無 webpack / vite。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- Marquee 跑馬燈 -->
+    <section class="info-marquee" aria-hidden="true">
+      <div class="info-marquee-track">
+        <span>VERTEX COLORS</span>
+        <span>LOOP SUBDIVISION</span>
+        <span>FBM CLOUDS</span>
+        <span>ACES TONEMAP</span>
+        <span>PCF SHADOW</span>
+        <span>INSTANCED MESH</span>
+        <span>RAYCASTER PICK</span>
+        <span>SHAPE-AWARE SMOOTHING</span>
+        <!-- 再複製一次讓 -50% 銜接 -->
+        <span>VERTEX COLORS</span>
+        <span>LOOP SUBDIVISION</span>
+        <span>FBM CLOUDS</span>
+        <span>ACES TONEMAP</span>
+        <span>PCF SHADOW</span>
+        <span>INSTANCED MESH</span>
+        <span>RAYCASTER PICK</span>
+        <span>SHAPE-AWARE SMOOTHING</span>
+      </div>
+    </section>
+
+    <!-- 功能亮點 -->
+    <section class="info-section" data-reveal>
+      <h2 class="info-h2">功能亮點</h2>
+      <ul class="info-functions">
+        <li data-reveal><strong>兩階段建造</strong>：第一次點空地 = 矮地基（從水下到水面 +0.3）；之後 = 一格高樓層 + 斜屋頂。</li>
+        <li data-reveal><strong>屋頂自動形變</strong>：依「region 內部度」決定該頂點抬升程度，孤立格成金字塔、雙格成 gable、大叢集成平頂。</li>
+        <li data-reveal><strong>InstancedMesh 門窗</strong>：每棟自動選最長外牆放拱形門，其他外牆依長度放 1–2 扇拱窗。</li>
+        <li data-reveal><strong>屋簷 overhang</strong>：頂層屋簷沿未被鄰格阻擋的邊外推，避免階梯建築穿模。</li>
+        <li data-reveal><strong>無限 Undo</strong>：history snapshot 堆疊 100 步，⌘Z / Ctrl-Z 可隨時退回。</li>
+        <li data-reveal><strong>Hover Ghost</strong>：3D 半透明預覽方塊含呼吸動畫與 footprint 提示，地基模式與樓層模式視覺不同。</li>
+        <li data-reveal><strong>平滑追焦</strong>：camera 與 OrbitControls target 隨建築重心緩慢 lerp 移動，保留使用者視角。</li>
+        <li data-reveal><strong>後處理 Bloom</strong>：UnrealBloom <code>threshold=0.85</code> 只挑亮部，營造微暖暈光。</li>
+        <li data-reveal><strong>自動繞鏡頭</strong>：開始選單下 camera 繞地圖中心緩慢 orbit，預覽用示範小鎮。</li>
+        <li data-reveal><strong>cinematic 選單</strong>：左側漸層黑 + monospace 選項，支援 ↑/↓/Enter 鍵盤導航。</li>
+      </ul>
+    </section>
+
+    <!-- 開發歷程 -->
+    <section class="info-section" data-reveal>
+      <h2 class="info-h2">開發歷程</h2>
+      <div class="info-timeline">
+        <article class="info-stage" data-reveal>
+          <span class="info-stage__label">STAGE 01</span>
+          <h3>地形系統</h3>
+          <p>從 hex 格網轉到 square + jitter；加入 curve distortion；用 shape-aware smoothing 收斂邊長。產出 441 個 quad cells。</p>
+        </article>
+        <article class="info-stage" data-reveal>
+          <span class="info-stage__label">STAGE 02</span>
+          <h3>渲染管線</h3>
+          <p>每棟建築合併 geometry → Loop subdivision → vertex colors 烤入；onBeforeCompile 注入瓦片與木紋 shader。</p>
+        </article>
+        <article class="info-stage" data-reveal>
+          <span class="info-stage__label">STAGE 03</span>
+          <h3>裝飾系統</h3>
+          <p>屋頂依 region 內部度自動形變、屋簷 overhang 避開鄰格穿模、InstancedMesh 門窗自動安置。</p>
+        </article>
+        <article class="info-stage" data-reveal>
+          <span class="info-stage__label">STAGE 04</span>
+          <h3>UI / 後處理</h3>
+          <p>UnrealBloom 微暈光、自訂天空 shader、cinematic 開始選單、鍵盤導航、PROJECT INFO 技術導覽頁。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="info-cta" data-reveal>
+      <h2>準備好開始建造了嗎？</h2>
+      <p>關閉這頁，回到選單按下 <strong>START</strong>，在自己的島上慢慢蓋一座小鎮。</p>
+      <button class="info-cta__btn" data-info-close>← BACK TO MENU</button>
+    </section>
+
+    <footer class="info-footer">
+      <span>© 2026 · ANIMATION PROGRAMMING COURSE</span>
+      <span>BLOCKTOWN · INSPIRED BY TOWNSCAPER</span>
+    </footer>
+
+  </main>
+</div>
+
+<div id="modal-about" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>ⓘ 關於本作</h2>
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div class="modal-body about-body">
+      <p>《小鎮建築師 Blocktown》是一款受 <b>Oskar Stålberg</b> 的 <i>Townscaper</i> 啟發的瀏覽器小鎮建築玩具。</p>
+      <p>使用程序生成的不規則格網、Loop subdivision 圓潤化與自訂 Shader 天空，重現 Townscaper 那種療癒的奶油北歐配色。</p>
+      <div class="tech-row">
+        <span class="tech-chip">Three.js</span>
+        <span class="tech-chip">Delaunator</span>
+        <span class="tech-chip">Loop Subdivision</span>
+        <span class="tech-chip">GLSL Shader</span>
+      </div>
+      <p class="about-foot">動畫程式課程作品 · 非商業用途</p>
+    </div>
+  </div>
 </div>
 
 <script type="importmap">
