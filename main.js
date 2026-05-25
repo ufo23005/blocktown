@@ -231,7 +231,9 @@ scene.add(new THREE.AmbientLight('#ffffff', 0.25));
 const sun = new THREE.DirectionalLight('#fff3d8', 1.35);
 sun.position.set(18, 30, 12);
 sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
+// 4096² 每幀 1600 萬 depth 取樣，於選單模式靜止場景是浪費。
+// 改 2048² 還是 4× 解析度的 PCF soft，視覺差別不大，但 GPU 負擔減 75%
+sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 0.5;
 sun.shadow.camera.far = 80;
 const sh = 32;
@@ -241,6 +243,10 @@ sun.shadow.camera.top = sh;
 sun.shadow.camera.bottom = -sh;
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.02;
+// 預設 autoUpdate=true → 每幀重算陰影貼圖。改為手動，只在場景變動時 flag needsUpdate
+// 選單繞鏡頭時建築完全靜止，省掉這筆每幀 5-30ms 的 GPU work
+sun.shadow.autoUpdate = false;
+sun.shadow.needsUpdate = true;     // 第一次跑要做一次
 scene.add(sun);
 
 // ===== 水面（Townscaper 風）=====
@@ -2519,6 +2525,7 @@ function rebuildAll() {
   for (let bid = 0; bid < buildingCells.length; bid++) {
     rebuildBuildingMesh(bid);
   }
+  sun.shadow.needsUpdate = true;   // 場景變動 → 下一幀重算陰影
 }
 
 refreshDecorations();
@@ -2622,6 +2629,7 @@ function rebuildAffectedBuildings(cellId) {
   for (let bid = 0; bid < buildingCells.length; bid++) {
     rebuildBuildingMesh(bid);
   }
+  sun.shadow.needsUpdate = true;   // 玩家放/拆方塊 → 重算陰影
 }
 
 function addBlock(cellId, level) {
@@ -3168,12 +3176,21 @@ document.addEventListener('keydown', (ev) => {
 });
 
 // ===== 主迴圈 =====
+// 用真實 delta time 跑動畫，避免「假設 60fps」造成的停頓感
+// clampDt：tab 切走 / 重操作後一次累積太多 ms，這裡截斷以免鏡頭跳秒
+let _lastFrameT = performance.now();
+const MAX_DT = 0.1;   // 100ms 上限
+
 function animate() {
   requestAnimationFrame(animate);
 
+  const _now = performance.now();
+  const dt = Math.min(MAX_DT, (_now - _lastFrameT) / 1000);
+  _lastFrameT = _now;
+
   if (menuMode) {
-    // 選單模式：鏡頭緩慢繞著小鎮中心轉
-    menuOrbitT += MENU_ORBIT_SPEED * (1 / 60);
+    // 選單模式：鏡頭緩慢繞著小鎮中心轉（牆鐘等速，frame time 無關）
+    menuOrbitT += MENU_ORBIT_SPEED * dt;
     const angle = menuOrbitT;
     camera.position.set(
       Math.cos(angle) * MENU_ORBIT_RADIUS,
@@ -3206,7 +3223,13 @@ function animate() {
   const _t = performance.now() * 0.001;
   if (skyMaterial) skyMaterial.uniforms.uTime.value = _t;
   if (_foamMat) _foamMat.uniforms.uTime.value = _t;   // 水波紋動態
-  if (composer) composer.render(); else renderer.render(scene, camera);
+
+  // PROJECT INFO 全螢幕黑底時 canvas 完全被擋住 → 跳過 render 省整套 GPU pipeline
+  // menuOrbitT 仍然 dt 累加，info-screen 關掉後鏡頭已在正確位置
+  const canvasObscured = !infoScreen.classList.contains('hidden');
+  if (!canvasObscured) {
+    if (composer) composer.render(); else renderer.render(scene, camera);
+  }
 }
 animate();
 
