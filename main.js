@@ -154,7 +154,8 @@ let skyMaterial = null;
 const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerHeight, 0.1, 600);
 camera.position.set(22, 18, 22);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// preserveDrawingBuffer 讓 toDataURL 能拿到最後一幀（PROJECT INFO 的 live preview 用）
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
@@ -3041,32 +3042,32 @@ document.getElementById('btn-howto').addEventListener('click', () => openModal(m
 document.getElementById('btn-about').addEventListener('click', () => openModal(modalAbout));
 
 // ===== 專案技術介紹頁（PROJECT INFO）=====
+// 整頁隨 #info-screen 的 opacity transition 一次淡入；hero 圖片用即時 canvas 截圖
 const infoScreen = document.getElementById('info-screen');
-let infoRevealObserver = null;
+const infoPreviewImg = document.getElementById('info-preview-img');
+
+function captureLivePreview() {
+  if (!infoPreviewImg) return;
+  // 確保 canvas 有最新一幀可截（renderer 已加 preserveDrawingBuffer:true）
+  if (composer) composer.render(); else renderer.render(scene, camera);
+  try {
+    infoPreviewImg.src = renderer.domElement.toDataURL('image/jpeg', 0.85);
+  } catch (e) {
+    // toDataURL 失敗（少見）就不換圖，不阻擋頁面開啟
+  }
+}
 
 function openInfo() {
+  captureLivePreview();
   infoScreen.classList.remove('hidden');
   infoScreen.setAttribute('aria-hidden', 'false');
+  infoScreen.scrollTop = 0;
   document.body.classList.add('info-open');
-  // 重置：再次開啟時清掉舊的 .is-revealed，讓動畫再播一次
-  infoScreen.querySelectorAll('[data-reveal].is-revealed')
-            .forEach(el => el.classList.remove('is-revealed'));
-  // 等下一個 frame 讓 visibility 切換完成、layout 穩定，再啟動 reveal 與 observer
-  requestAnimationFrame(() => {
-    infoScreen.scrollTop = 0;
-    revealVisibleNow();           // 立即把目前在 viewport 內的元素揭露
-    startInfoObserver();          // 之後 scroll 觸發剩餘元素
-  });
 }
 function closeInfo() {
   infoScreen.classList.add('hidden');
   infoScreen.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('info-open');
-  // 銷毀 observer，下次開啟重建
-  if (infoRevealObserver) {
-    infoRevealObserver.disconnect();
-    infoRevealObserver = null;
-  }
 }
 
 document.getElementById('btn-info').addEventListener('click', openInfo);
@@ -3074,39 +3075,15 @@ infoScreen.querySelectorAll('[data-info-close]').forEach(el =>
   el.addEventListener('click', closeInfo)
 );
 
-// 立即揭露：把目前在 viewport 內的 [data-reveal] 加 .is-revealed
-// 用 setTimeout stagger 製造由上而下的進場節奏（hero 統計卡卡片之間錯開 80ms）
-function revealVisibleNow() {
-  const targets = Array.from(infoScreen.querySelectorAll('[data-reveal]'));
-  const vh = window.innerHeight;
-  let stagger = 0;
-  for (const el of targets) {
-    const rect = el.getBoundingClientRect();
-    if (rect.top < vh - 40) {                   // 在 viewport 內或臨界外緣
-      setTimeout(() => el.classList.add('is-revealed'), stagger);
-      stagger += 70;
-    }
-  }
-}
-
-// IntersectionObserver：負責 scroll 後段的 reveal（hero 之後 scroll 到才看見的卡片）
-function startInfoObserver() {
-  if (infoRevealObserver) return;
-  infoRevealObserver = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (e.isIntersecting && !e.target.classList.contains('is-revealed')) {
-        e.target.classList.add('is-revealed');
-        infoRevealObserver.unobserve(e.target);
-      }
-    }
-  }, {
-    root: infoScreen,
-    threshold: 0.1,
-    rootMargin: '0px 0px -60px 0px',
+// 「試試看」按鈕：關掉 PROJECT INFO 並立刻進入編輯模式
+// 報告中講完技術一鍵 demo
+infoScreen.querySelectorAll('[data-info-try]').forEach(el => {
+  el.addEventListener('click', () => {
+    closeInfo();
+    // 等 info-screen 淡出開始再觸發 START，視覺更順
+    setTimeout(() => document.getElementById('btn-start').click(), 60);
   });
-  infoScreen.querySelectorAll('[data-reveal]:not(.is-revealed)')
-            .forEach(el => infoRevealObserver.observe(el));
-}
+});
 
 // Modal 關閉：✕ 按鈕 / 點背景 / Esc
 document.querySelectorAll('[data-close]').forEach(b => {
