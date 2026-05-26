@@ -3796,6 +3796,158 @@ function stopLiveCorniceDemo() {
   _detachLiveVisibilityObserver(_liveCornice?.container);
 }
 
+// ===== 屋脊判定 LIVE DEMO =====
+// 借用主場景 mesh：buildingMeshes (含地基 + 樓層 + 三角屋頂) + floors + cornices
+// camera 偏俯角，看屋脊脊線（vertex height weights = 1 共邊端點被拉到頂）
+let _liveRoof = null;
+let _liveRoofRAF = 0;
+let _liveRoofRunning = false;
+
+function _initLiveRoofDemo() {
+  if (_liveRoof) return;
+  const container = document.getElementById('code-live-roof');
+  if (!container) return;
+
+  const w = container.clientWidth || 320;
+  const h = container.clientHeight || Math.round(w * 11 / 16);
+
+  const r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  r.setPixelRatio(1);
+  r.setSize(w, h);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.05;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  container.appendChild(r.domElement);
+  r.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('[live-roof] WebGL context lost');
+    _liveRoofRunning = false;
+  });
+
+  const s = new THREE.Scene();
+  s.background = new THREE.Color('#2c4651');
+  s.fog = new THREE.Fog('#2c4651', 14, 32);
+
+  // 水面（背景）
+  const waterGeom = new THREE.PlaneGeometry(60, 60, 1, 1);
+  waterGeom.rotateX(-Math.PI / 2);
+  const water = new THREE.Mesh(waterGeom, new THREE.MeshBasicMaterial({ color: 0x1f4d5c }));
+  water.position.y = WATER_Y;
+  s.add(water);
+
+  // 光照
+  s.add(new THREE.HemisphereLight('#bfd6ee', '#7a6a50', 0.70));
+  s.add(new THREE.AmbientLight('#ffffff', 0.30));
+  const sun = new THREE.DirectionalLight('#fff3d8', 1.20);
+  sun.position.set(8, 12, 6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(512, 512);
+  sun.shadow.camera.near = 0.5;
+  sun.shadow.camera.far = 30;
+  const sh = 12;
+  sun.shadow.camera.left = -sh;  sun.shadow.camera.right = sh;
+  sun.shadow.camera.top = sh;    sun.shadow.camera.bottom = -sh;
+  sun.shadow.bias = -0.0006;
+  sun.shadow.normalBias = 0.04;
+  sun.shadow.autoUpdate = false;
+  sun.shadow.needsUpdate = true;
+  s.add(sun);
+
+  const borrowedGroup = new THREE.Group();
+  s.add(borrowedGroup);
+
+  // Camera：俯角約 50°、距離適中，能看到屋脊三角頂
+  //   屋頂 y ≈ FOUNDATION_TOP_Y + lvl + ROOF_HEIGHT ≈ 2-3.5（看樓層高度）
+  //   target 抓 (0, 2, 0) 對著屋頂高度
+  const cam = new THREE.PerspectiveCamera(34, w / h, 0.1, 80);
+  cam.position.set(8, 7, 8);
+
+  const ctl = new OrbitControls(cam, r.domElement);
+  ctl.enableDamping = true;
+  ctl.dampingFactor = 0.10;
+  ctl.minDistance = 4;
+  ctl.maxDistance = 18;
+  ctl.maxPolarAngle = Math.PI * 0.45;     // 不太低 → 持續看到屋頂
+  ctl.minPolarAngle = Math.PI * 0.08;     // 可以接近 top-down 看屋脊
+  ctl.target.set(0, 2.0, 0);              // 對著屋頂高度
+  ctl.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: null, RIGHT: null };
+  ctl.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY };
+
+  const ro = new ResizeObserver(() => {
+    const nw = container.clientWidth;
+    const nh = container.clientHeight;
+    if (nw && nh) {
+      cam.aspect = nw / nh;
+      cam.updateProjectionMatrix();
+      r.setSize(nw, nh, false);
+    }
+  });
+  ro.observe(container);
+
+  const touched = () => container.classList.add('is-touched');
+  r.domElement.addEventListener('pointerdown', touched, { once: true });
+  r.domElement.addEventListener('wheel', touched, { once: true, passive: true });
+
+  _liveRoof = { renderer: r, scene: s, camera: cam, controls: ctl, group: borrowedGroup, observer: ro, container };
+}
+
+// 借用主場景：完整建築 (含屋頂) + 地基地板 + 紅帶。不加欄杆
+function _refreshLiveRoofMeshes() {
+  if (!_liveRoof) return;
+  const g = _liveRoof.group;
+  while (g.children.length) g.remove(g.children[0]);
+
+  // 所有建築 mesh（含地基 + 樓層 + 屋頂三角脊）— 主角是屋脊
+  for (const [bid, bMesh] of buildingMeshes) {
+    if (!bMesh || !bMesh.geometry) continue;
+    g.add(new THREE.Mesh(bMesh.geometry, bMesh.material));
+  }
+  // 地基頂面
+  if (foundationFloorsMesh && foundationFloorsMesh.geometry) {
+    g.add(new THREE.Mesh(foundationFloorsMesh.geometry, foundationFloorsMesh.material));
+  }
+  // 紅帶（讓觀眾識別這是地基外緣）
+  if (foundationCornicesMesh && foundationCornicesMesh.geometry) {
+    g.add(new THREE.Mesh(foundationCornicesMesh.geometry, foundationCornicesMesh.material));
+  }
+}
+
+function _animateLiveRoof() {
+  if (!_liveRoofRunning) return;
+  _liveRoofRAF = requestAnimationFrame(_animateLiveRoof);
+  const lr = _liveRoof;
+  if (!lr) return;
+  lr.controls.update();
+  lr.renderer.render(lr.scene, lr.camera);
+}
+
+function startLiveRoofDemo() {
+  _initLiveRoofDemo();
+  if (!_liveRoof) return;
+  _refreshLiveRoofMeshes();
+  _attachLiveVisibilityObserver(_liveRoof.container, (visible) => {
+    if (visible) {
+      if (_liveRoofRunning) return;
+      _liveRoofRunning = true;
+      _animateLiveRoof();
+    } else {
+      _liveRoofRunning = false;
+      if (_liveRoofRAF) { cancelAnimationFrame(_liveRoofRAF); _liveRoofRAF = 0; }
+    }
+  });
+}
+
+function stopLiveRoofDemo() {
+  _liveRoofRunning = false;
+  if (_liveRoofRAF) {
+    cancelAnimationFrame(_liveRoofRAF);
+    _liveRoofRAF = 0;
+  }
+  _detachLiveVisibilityObserver(_liveRoof?.container);
+}
+
 // 共用：在 #info-screen 內捲動時偵測 demo 是否進入視野
 // 用 WeakMap 紀錄每個 container 的 IO，方便 detach
 const _liveVisibilityIOs = new WeakMap();
@@ -3880,6 +4032,7 @@ function openInfo() {
   startLiveWaterDemo();
   startLiveRailingDemo();
   startLiveCorniceDemo();
+  startLiveRoofDemo();
 
   // 第一次開啟自動拍 15 張（之後重開沿用已拍的，免得每次都卡 1-2 秒）
   if (!_shotsCaptured) {
@@ -3895,6 +4048,7 @@ function closeInfo() {
   stopLiveWaterDemo();
   stopLiveRailingDemo();
   stopLiveCorniceDemo();
+  stopLiveRoofDemo();
 }
 
 document.getElementById('btn-info').addEventListener('click', openInfo);

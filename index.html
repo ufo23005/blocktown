@@ -963,17 +963,15 @@ cellGroup.add(mesh);</code></pre>
           <header class="code-card__head">
             <span class="code-card__num">05</span>
             <h4>Vertex Height Weights · 屋脊判定</h4>
+            <span class="code-card__live-tag">LIVE</span>
             <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L776" target="_blank" rel="noopener">main.js:776 ↗</a>
           </header>
           <div class="code-card__body">
-            <figure class="code-shot">
-              <img data-shot="building-roof-apex" alt="三角屋頂頂點" loading="lazy"/>
-              <figcaption>屋脊：共邊端點拉到頂</figcaption>
-              <div class="code-shot__btns">
-                <button class="code-mini-btn" data-reshoot="building-roof-apex" title="重新截圖">🔄</button>
-                <button class="code-mini-btn" data-download="building-roof-apex" title="下載 JPEG">💾</button>
-              </div>
-            </figure>
+            <!-- 即時 mini 3D 場景：完整建築（地基 + 樓層 + 三角屋頂），俯角看屋脊脊線 -->
+            <div class="code-live" id="code-live-roof" data-live="roof" role="img" aria-label="即時屋脊判定示範">
+              <div class="code-live__hint">🖱 拖曳旋轉 · 滾輪縮放</div>
+              <div class="code-live__badge">LIVE · 即時運算</div>
+            </div>
             <pre class="code-snippet"><code>let internalEdges = 0, totalEdges = 0;
 for (const cid of vertexToCells.get(vidx)) {
   if (!regionSet.has(cid)) continue;
