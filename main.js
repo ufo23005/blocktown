@@ -155,8 +155,10 @@ const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerH
 camera.position.set(22, 18, 22);
 
 // preserveDrawingBuffer 讓 toDataURL 能拿到最後一幀（PROJECT INFO 的 live preview 用）
+// pixelRatio max 1.5：在 Retina（DPR=2）下 framebuffer 像素數 ↓ ~44%（從 4× 變 2.25×）
+// 減少 Safari 因 GPU 記憶體壓力 kill tab 觸發頁面刷新。視覺差 retina 用戶肉眼難辨。
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -170,7 +172,7 @@ app.appendChild(renderer.domElement);
 let composer = null;
 {
   composer = new EffectComposer(renderer);
-  composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));   // 與 renderer 一致
   composer.setSize(window.innerWidth, window.innerHeight);
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(new UnrealBloomPass(
@@ -232,9 +234,10 @@ scene.add(new THREE.AmbientLight('#ffffff', 0.25));
 const sun = new THREE.DirectionalLight('#fff3d8', 1.35);
 sun.position.set(18, 30, 12);
 sun.castShadow = true;
-// 4096² 每幀 1600 萬 depth 取樣，於選單模式靜止場景是浪費。
-// 改 2048² 還是 4× 解析度的 PCF soft，視覺差別不大，但 GPU 負擔減 75%
-sun.shadow.mapSize.set(2048, 2048);
+// 4096² 每幀 1600 萬 depth 取樣浪費。改 1024² 配 PCF soft 模糊，視覺差別小但 VRAM ↓ 75%
+//   2048² × RGBA × float = ~64 MB → 1024² = ~16 MB（省 48 MB，避免 Safari kill tab）
+//   bias / normalBias 略放寬一些補償解析度下降造成的精度
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.camera.near = 0.5;
 sun.shadow.camera.far = 80;
 const sh = 32;
@@ -242,8 +245,8 @@ sun.shadow.camera.left = -sh;
 sun.shadow.camera.right = sh;
 sun.shadow.camera.top = sh;
 sun.shadow.camera.bottom = -sh;
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.02;
+sun.shadow.bias = -0.0006;        // 配 1024² shadow map 稍放寬避免 acne
+sun.shadow.normalBias = 0.04;     // 配 1024² shadow map 稍放寬避免 peter-panning
 // 預設 autoUpdate=true → 每幀重算陰影貼圖。改為手動，只在場景變動時 flag needsUpdate
 // 選單繞鏡頭時建築完全靜止，省掉這筆每幀 5-30ms 的 GPU work
 sun.shadow.autoUpdate = false;
