@@ -150,8 +150,9 @@
     pointer-events: none;
     transition: opacity 0.4s ease;
   }
-  /* 選單模式下：滑鼠互動只給選單；canvas 不接事件，避免空白處鎖鏡頭 */
-  body.menu-active canvas { pointer-events: none; }
+  /* 選單模式下：滑鼠互動只給選單；主場景 canvas 不接事件，避免空白處鎖鏡頭
+   * 限定 #app 內，這樣 PROJECT INFO 內的 mini 3D demo canvas 不受影響 */
+  body.menu-active #app canvas { pointer-events: none; }
 
   /* ========== 開始畫面：cinematic 左側漸層黑底 ========== */
   #start-screen {
@@ -1429,6 +1430,447 @@
     background: none;
     padding: 0;
     white-space: pre;
+  }
+
+  /* ===== 核心程式碼 v2：5 章 15 卡 · 左圖右碼 ===== */
+
+  .info-code-section .info-h2 {
+    margin-bottom: 12px;
+  }
+
+  .code-section-hint {
+    margin: 0 0 18px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: rgba(244, 236, 216, 0.62);
+    font-family: inherit;
+  }
+  .code-section-hint code {
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: rgba(255, 245, 220, 0.88);
+    background: rgba(232, 156, 90, 0.10);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* 子導覽：跳到各章 */
+  .code-toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 24px;
+    padding: 10px 12px;
+    background: rgba(232, 156, 90, 0.04);
+    border: 1px solid rgba(232, 156, 90, 0.18);
+    border-radius: 8px;
+    position: sticky;
+    top: 70px;
+    z-index: 2;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .code-toc a {
+    flex: 1 1 auto;
+    text-align: center;
+    padding: 6px 10px;
+    font-size: 10.5px;
+    letter-spacing: 0.20em;
+    color: rgba(244, 236, 216, 0.72);
+    text-decoration: none;
+    border-radius: 5px;
+    transition: background 0.15s, color 0.15s;
+    font-family: inherit;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .code-toc a:hover {
+    background: rgba(247, 200, 120, 0.18);
+    color: #fff5dc;
+  }
+
+  /* Group：§ 1 ~ § 5 */
+  .code-group {
+    margin: 0 0 36px;
+    scroll-margin-top: 80px;
+  }
+  .code-group__title {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    color: #f4ecd8;
+    margin: 0 0 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(232, 156, 90, 0.30);
+  }
+  .code-group__num {
+    color: #e08070;
+    font-size: 14px;
+    letter-spacing: 0.10em;
+  }
+  .code-group__title small {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: rgba(244, 236, 216, 0.45);
+    font-weight: normal;
+    margin-left: auto;
+  }
+
+  /* Code card：左圖右碼 */
+  .code-card {
+    background: rgba(244, 236, 216, 0.028);
+    border: 1px solid rgba(244, 236, 216, 0.10);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  .code-card:last-child {
+    margin-bottom: 0;
+  }
+  .code-card:hover {
+    background: rgba(244, 236, 216, 0.05);
+    border-color: rgba(247, 200, 120, 0.25);
+  }
+
+  .code-card__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed rgba(244, 236, 216, 0.12);
+  }
+  .code-card__num {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #e08070, #eaa860);
+    color: #1d1610;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  .code-card__head h4 {
+    flex: 1 1 auto;
+    margin: 0;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: #f7c878;
+  }
+  .code-card__src {
+    flex: 0 0 auto;
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: #f7c878;
+    text-decoration: none;
+    background: rgba(232, 156, 90, 0.10);
+    border: 1px solid rgba(232, 156, 90, 0.30);
+    padding: 3px 9px;
+    border-radius: 4px;
+    transition: background 0.18s, color 0.18s;
+    white-space: nowrap;
+  }
+  .code-card__src:hover {
+    background: #f7c878;
+    color: #1d1610;
+  }
+
+  /* body：左圖右碼 2 欄、等高
+   * 左欄：min 280px、max 460px
+   * 右欄：剩餘空間全給 code，min 0 才能正確 shrink
+   * align-items: stretch —— 兩欄拉到同高，row 高度由 code-snippet 的 max-height 決定
+   * （注意：.code-live 已移除 aspect-ratio，否則 stretch 會反算 width 撐破 grid track） */
+  .code-card__body {
+    display: grid;
+    grid-template-columns: minmax(280px, 460px) minmax(0, 1fr);
+    gap: 18px;
+    align-items: stretch;
+  }
+
+  /* Screenshot 區 */
+  .code-shot {
+    position: relative;
+    margin: 0;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(244, 236, 216, 0.10);
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+  }
+  .code-shot img {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 11;
+    object-fit: cover;
+    display: block;
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(244, 236, 216, 0.04),
+      rgba(244, 236, 216, 0.04) 8px,
+      rgba(244, 236, 216, 0.06) 8px,
+      rgba(244, 236, 216, 0.06) 16px
+    );
+    transition: opacity 0.25s;
+  }
+  /* img 還沒 load 時顯示斜紋 placeholder + 「待拍攝」字 */
+  .code-shot img:not([src]),
+  .code-shot img[src=""] {
+    opacity: 0.7;
+  }
+  .code-shot figcaption {
+    padding: 7px 10px;
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    color: rgba(244, 236, 216, 0.72);
+    background: rgba(0, 0, 0, 0.30);
+    border-top: 1px solid rgba(244, 236, 216, 0.08);
+    text-transform: uppercase;
+    font-weight: 600;
+    text-align: center;
+    margin-top: auto;
+  }
+  .code-shot__btns {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .code-shot:hover .code-shot__btns {
+    opacity: 1;
+  }
+  .code-mini-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.70);
+    color: #f7c878;
+    border: 1px solid rgba(247, 200, 120, 0.40);
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .code-mini-btn:hover {
+    background: rgba(247, 200, 120, 0.30);
+    transform: scale(1.08);
+  }
+  .code-mini-btn:active {
+    transform: scale(0.95);
+  }
+  .code-mini-btn[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* 拍攝中狀態：spinning */
+  .code-mini-btn.is-shooting {
+    animation: code-shoot-spin 0.6s linear infinite;
+  }
+  @keyframes code-shoot-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Snippet 區 */
+  .code-snippet {
+    margin: 0;
+    background: rgba(0, 0, 0, 0.30);
+    border: 1px solid rgba(244, 236, 216, 0.10);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 360px;
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.65;
+    color: #f0e0c0;
+    /* 自訂 scrollbar */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(247, 200, 120, 0.30) transparent;
+  }
+  .code-snippet::-webkit-scrollbar { width: 6px; height: 6px; }
+  .code-snippet::-webkit-scrollbar-thumb {
+    background: rgba(247, 200, 120, 0.30);
+    border-radius: 3px;
+  }
+  .code-snippet::-webkit-scrollbar-track { background: transparent; }
+  .code-snippet code {
+    font-family: inherit;
+    color: inherit;
+    background: none;
+    padding: 0;
+    white-space: pre;
+  }
+  /* GLSL/Shader 區塊用稍冷的色調做區別 */
+  .code-snippet code.lang-glsl {
+    color: #e8e0d0;
+  }
+
+  /* LIVE 標籤（出現在卡片標題列） */
+  .code-card__live-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.18em;
+    color: #f7c878;
+    background: rgba(247, 200, 120, 0.12);
+    border: 1px solid rgba(247, 200, 120, 0.40);
+    border-radius: 4px;
+    font-weight: 700;
+    position: relative;
+  }
+  .code-card__live-tag::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #ff6b5b;
+    box-shadow: 0 0 6px #ff6b5b;
+    animation: code-live-pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes code-live-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+  }
+
+  /* 即時 mini 3D 場景容器（取代 .code-shot 的位置）
+   * 不設 aspect-ratio：grid stretch 會把高度拉到 code-snippet 的 max-height，
+   * canvas 用 width/height 100% 跟著填滿；ResizeObserver 同步 cam.aspect */
+  .code-live {
+    position: relative;
+    background: linear-gradient(180deg, #1a3548 0%, #0c2030 100%);
+    border: 1px solid rgba(244, 236, 216, 0.10);
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 280px;       /* 防止 code 很短時 demo 縮太小 */
+    cursor: grab;
+  }
+  .code-live:active { cursor: grabbing; }
+  .code-live canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+  }
+  .code-live__hint {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 10px;
+    background: rgba(0, 0, 0, 0.55);
+    color: rgba(244, 236, 216, 0.85);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    border-radius: 999px;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    white-space: nowrap;
+    opacity: 1;
+    transition: opacity 0.4s 1.8s;        /* 1.8 秒後自動淡出 */
+  }
+  .code-live:hover .code-live__hint {
+    opacity: 1;
+    transition: opacity 0.2s;
+  }
+  /* 滑鼠 idle 一段時間後 hint 淡出（透過 :has 不行，用 JS 控 .is-touched） */
+  .code-live.is-touched .code-live__hint { opacity: 0; }
+  .code-live.is-touched:hover .code-live__hint { opacity: 1; }
+  .code-live__badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 3px 8px;
+    background: rgba(232, 156, 90, 0.18);
+    border: 1px solid rgba(232, 156, 90, 0.40);
+    color: #f7c878;
+    font-size: 9.5px;
+    letter-spacing: 0.20em;
+    font-weight: 700;
+    border-radius: 4px;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+
+  /* WHY 段 */
+  .code-card__why {
+    margin: 14px 0 0;
+    padding: 10px 14px;
+    background: rgba(232, 156, 90, 0.05);
+    border-left: 3px solid rgba(232, 156, 90, 0.50);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: rgba(244, 236, 216, 0.82);
+    font-family: inherit;
+  }
+  .code-card__why b {
+    color: #f7c878;
+    margin-right: 4px;
+  }
+  .code-card__why code {
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: rgba(255, 245, 220, 0.92);
+    background: rgba(232, 156, 90, 0.14);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* RWD：< 900px 改 stack（圖上碼下） */
+  @media (max-width: 900px) {
+    .code-card__body {
+      grid-template-columns: 1fr;
+      align-items: start;       /* stack 不需要 stretch */
+    }
+    .code-shot {
+      min-height: 0;
+    }
+    /* mobile：demo 用 aspect-ratio 維持比例（沒有 code 在旁邊參考） */
+    .code-live {
+      aspect-ratio: 16 / 11;
+      min-height: 0;
+    }
+    .code-snippet {
+      max-height: 280px;
+      font-size: 11px;
+    }
+    .code-toc {
+      position: static;
+      flex-direction: row;
+      overflow-x: auto;
+    }
+    .code-toc a {
+      flex: 0 0 auto;
+    }
   }
 
   /* ===== 挑戰與解決 ===== */

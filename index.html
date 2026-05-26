@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>小鎮建築師 — Townscaper 風格</title>
+<title>BLOCKTOWN</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -11,7 +11,7 @@
 <div id="loading">正在產生地圖…</div>
 <div id="cursor-info"></div>
 
-<div id="title">小鎮建築師</div>
+<div id="title">BLOCKTOWN</div>
 
 <div id="toolbar">
   <button class="btn" id="btn-undo">↶ 復原</button>
@@ -44,7 +44,7 @@
 
   <!-- 左側主內容 -->
   <div id="start-content">
-    <h1 id="start-title">小鎮建築師</h1>
+    <h1 id="start-title">BLOCKTOWN</h1>
     <div id="start-subtitle">A SMALL TOWN ON A FLOATING ISLAND, BUILT BLOCK BY BLOCK&nbsp;&nbsp;→</div>
 
     <nav id="start-menu-buttons">
@@ -791,22 +791,40 @@
       </div>
     </section>
 
-    <!-- 核心程式碼（預設收合，技術觀眾自行展開）-->
-    <section class="info-section">
-      <details class="info-code-fold">
-        <summary>
-          <h2 class="info-h2 info-h2--inline">核心程式碼</h2>
-          <span class="info-code-fold__hint">▶ 展開程式碼 · Show snippets</span>
-        </summary>
-      <div class="info-code-grid">
+    <!-- 核心程式碼：15 個關鍵 snippet，分 5 章，每張左圖右碼 -->
+    <section class="info-section info-code-section">
+      <h2 class="info-h2">核心程式碼</h2>
+      <p class="code-section-hint">15 個關鍵函式按 <b>5 大主題</b>分組，每張卡左側是<b>遊戲現場截圖</b>、右側是<b>精華程式碼</b>，點 <code>main.js:行號 ↗</code> 跳 GitHub 看完整版。截圖開頁時自動拍，需要更新可按每張卡的 <span class="code-mini-btn">🔄</span> 重拍、按 <span class="code-mini-btn">💾</span> 下載。</p>
 
-        <article class="info-code">
-          <header class="info-code__head">
-            <span class="info-code__tag">generateGrid()</span>
-            <h3>雙層 sine 波 — Curve Distortion</h3>
+      <!-- 子導覽：跳到各章 -->
+      <nav class="code-toc">
+        <a href="#code-terrain">§ 1 TERRAIN</a>
+        <a href="#code-building">§ 2 BUILDING</a>
+        <a href="#code-shader">§ 3 SHADER</a>
+        <a href="#code-decoration">§ 4 DECORATION</a>
+        <a href="#code-interaction">§ 5 INTERACTION</a>
+      </nav>
+
+      <!-- ====== § 1. TERRAIN ====== -->
+      <div class="code-group" id="code-terrain">
+        <h3 class="code-group__title"><span class="code-group__num">§ 1</span> TERRAIN · 地形生成 <small>3 個 snippet</small></h3>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">01</span>
+            <h4>Curve Distortion · 雙層 sine 波</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L298" target="_blank" rel="noopener">main.js:298 ↗</a>
           </header>
-          <p>讓行列像水波一樣彎曲，產生 Townscaper 風的 flow 感。雙層相位錯開的 sine 波，振幅 0.35、頻率 0.32，seed 影響相位。</p>
-<pre><code>const phaseX = rnd() * Math.PI * 2;
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="terrain-overview" alt="俯瞰整片有機格網" loading="lazy"/>
+              <figcaption>俯瞰：彎曲格網</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="terrain-overview" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="terrain-overview" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>const phaseX = rnd() * Math.PI * 2;
 const phaseZ = rnd() * Math.PI * 2;
 for (const v of usedVerts) {
   const [x, z] = pts[v];
@@ -818,15 +836,145 @@ for (const v of usedVerts) {
            + Math.cos(x * CURVE_FREQ * 1.73 + phaseZ + 2.3) * CURVE_AMP * 0.4;
   pts[v] = [x + dx, z + dz];
 }</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>雙層相位錯開的 sine 波（振幅 0.35、頻率 0.32），讓行列像水波一樣彎，產生 Townscaper 風 flow 感；seed 影響相位 → 每次 shuffle 形狀不同。</p>
         </article>
 
-        <article class="info-code">
-          <header class="info-code__head">
-            <span class="info-code__tag">computeVertexHeightWeights()</span>
-            <h3>region 內部度 — Auto Roof</h3>
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">02</span>
+            <h4>Shape-Aware Smoothing · 等邊鬆弛</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L423" target="_blank" rel="noopener">main.js:423 ↗</a>
           </header>
-          <p>對每個頂點掃描相鄰邊：兩側都是同 region 同層 cell 視為 internal edge。fraction = internal / total。0 為屋簷邊界、1 為屋脊內部。</p>
-<pre><code>let internalEdges = 0, totalEdges = 0;
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="terrain-smooth" alt="邊長均勻的島嶼細節" loading="lazy"/>
+              <figcaption>邊長均勻收斂後</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="terrain-smooth" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="terrain-smooth" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>for (let pass = 0; pass &lt; SHAPE_PASSES; pass++) {
+  let totalLen = 0;
+  for (const [a, b] of edgeList) totalLen += Math.hypot(...);
+  const targetLen = totalLen / edgeList.length;  // 目標 = 平均邊長
+
+  for (const [a, b] of edgeList) {
+    const len = Math.hypot(dx, dz);
+    const half = (len - targetLen) * 0.5;  // 太長→端點互推；太短→端點互拉
+    disp[a][0] += (dx/len)*half;  disp[b][0] -= (dx/len)*half;
+    /* z 同理 */
+  }
+  for (let i = 0; i &lt; pts.length; i++) {
+    if (isBoundaryVert.has(i)) continue;   // 邊界鎖定 → 圓島輪廓不變
+    pts[i][0] += disp[i][0] / cnt[i] * SHAPE_STRENGTH;
+  }
+}</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>10 pass 漸進把所有 quad 的邊長磨到差不多；邊界頂點全程鎖定，外輪廓始終是圓島。比 Laplacian smoothing 多保留了 curve distortion 的彎曲感。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">03</span>
+            <h4>keepLargestComponent · 離島過濾</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L590" target="_blank" rel="noopener">main.js:590 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="terrain-component" alt="完整單一連通島嶼" loading="lazy"/>
+              <figcaption>過濾後：完整一座島</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="terrain-component" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="terrain-component" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>const visited = new Uint8Array(allCells.length);
+const components = [];
+for (let i = 0; i &lt; allCells.length; i++) {
+  if (visited[i]) continue;
+  const comp = [];
+  const stack = [i];           // BFS / DFS 走訪整塊連通分量
+  visited[i] = 1;
+  while (stack.length) {
+    const cid = stack.pop();
+    comp.push(cid);
+    for (const nb of allCells[cid].neighbors) {
+      if (nb !== null &amp;&amp; !visited[nb]) {
+        visited[nb] = 1;
+        stack.push(nb);
+      }
+    }
+  }
+  components.push(comp);
+}
+components.sort((a, b) =&gt; b.length - a.length);
+return new Set(components[0]);   // 只保留最大的那塊</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>圓形 mask 切完可能產生孤立的小碎塊；BFS 走訪 + 取最大連通分量 → 保證玩家拿到的永遠是「一整座島」而不是散落的碎片。</p>
+        </article>
+      </div>
+
+      <!-- ====== § 2. BUILDING ====== -->
+      <div class="code-group" id="code-building">
+        <h3 class="code-group__title"><span class="code-group__num">§ 2</span> BUILDING · 建築幾何 <small>3 個 snippet</small></h3>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">04</span>
+            <h4>Loop Subdivision · 揉圓建築</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2065" target="_blank" rel="noopener">main.js:2065 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="building-puffy" alt="puffy 圓潤建築特寫" loading="lazy"/>
+              <figcaption>圓潤 puffy 建築</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="building-puffy" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="building-puffy" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>// 合併所有 cell 的方塊幾何 → 單一 BufferGeometry
+const baseGeom = new THREE.BufferGeometry();
+baseGeom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+baseGeom.setAttribute('color',    new THREE.Float32BufferAttribute(colors, 3));
+baseGeom.setIndex(indices);
+
+// 1. 去重共邊頂點，subdivision 才能跨面平滑
+const merged = mergeVertices(baseGeom, 1e-4);
+
+// 2. Loop subdivision：每個三角形分成 4 個並平滑
+const subdiv = LoopSubdivision.modify(merged, 1, {
+  split: true,
+  uvSmooth: false,
+  preserveEdges: false,
+  flatOnly: false,
+});
+
+const mesh = new THREE.Mesh(subdiv, buildingMaterial);
+mesh.castShadow = true; mesh.receiveShadow = true;
+cellGroup.add(mesh);</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>同棟所有 cell 合併成單一 mesh 再揉圓 → 整棟輪廓無縫、頂點色平滑過渡。<code>mergeVertices</code> 是關鍵：沒去重會導致 subdivision 在共邊產生裂縫。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">05</span>
+            <h4>Vertex Height Weights · 屋脊判定</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L776" target="_blank" rel="noopener">main.js:776 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="building-roof-apex" alt="三角屋頂頂點" loading="lazy"/>
+              <figcaption>屋脊：共邊端點拉到頂</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="building-roof-apex" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="building-roof-apex" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>let internalEdges = 0, totalEdges = 0;
 for (const cid of vertexToCells.get(vidx)) {
   if (!regionSet.has(cid)) continue;
   const cell = cells[cid];
@@ -839,30 +987,421 @@ for (const cid of vertexToCells.get(vidx)) {
   }
 }
 // fraction &gt;= 0.5 直接拉到頂 → 共邊端點變屋脊
-const w = Math.min(1, internalEdges / totalEdges * 2);</code></pre>
+const w = Math.min(1, internalEdges / totalEdges * 2);
+// → 在 rebuildBuildingMesh 內 py = y1 + w * ROOF_HEIGHT</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>掃描每個頂點的相鄰邊：兩側都是同棟同層 = internal edge。fraction → 0 為屋簷邊界、1 為屋脊內部。完全程序化決定屋頂高度，多 cell 自動長出 hip / gable / tent 屋頂。</p>
         </article>
 
-        <article class="info-code">
-          <header class="info-code__head">
-            <span class="info-code__tag">injectBlockShader()</span>
-            <h3>onBeforeCompile — 瓦片圓點</h3>
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">06</span>
+            <h4>Eave Overhang · 屋簷外推 + 垂下</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2148" target="_blank" rel="noopener">main.js:2148 ↗</a>
           </header>
-          <p>透過 Three.js material 的 onBeforeCompile hook 注入 GLSL，用 world-space derivatives 推 face normal，再給朝上的面加交錯排列的圓點瓦片。</p>
-<pre><code>// === 屋頂：交錯排列圓點瓦片 ===
-float roofW = smoothstep(0.25, 0.55, wN.y);
-if (roofW &gt; 0.0) {
-  vec2 t = vWPos.xz * uTileScale;
-  // 每隔一行橫向偏移半格，做出磚面般的錯位
-  if (mod(floor(t.y), 2.0) &gt; 0.5) t.x += 0.5;
-  vec2 local = fract(t) - 0.5;
-  float d = length(local);
-  float dot = smoothstep(0.44, 0.28, d);
-  diffuseColor.rgb *= (1.0 - dot * uTileStrength * roofW);
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="building-overhang" alt="屋簷側面 droop" loading="lazy"/>
+              <figcaption>屋簷外推 22cm + 垂下 3cm</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="building-overhang" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="building-overhang" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>// 跨 region 累加非共邊法線
+// → 共邊兩端推外方向跨 cell 一致，屋簷無裂縫
+let nxSum = 0, nzSum = 0;
+for (const cid of vertexToCells.get(vidx)) {
+  if (buildingId.get(cid) !== bid) continue;
+  for (const ei of edgeIndices) {
+    const nb = cells[cid].neighbors[ei];
+    if (internal || blocking) continue;
+    nxSum += -edz / elen;          // 邊外法線（左手系）
+    nzSum +=  edx / elen;
+  }
+}
+const nlen = Math.hypot(nxSum, nzSum);
+if (nlen &gt; 1e-4) {
+  px += (nxSum / nlen) * ROOF_OVERHANG;   // 外推 22cm
+  pz += (nzSum / nlen) * ROOF_OVERHANG;
+}
+// 邊界屋簷略垂下 3cm，營造瓦片下垂感
+py = isStrictBoundary
+   ? (y1 - EAVE_DROOP)
+   : (y1 + w * ROOF_HEIGHT);              // 屋脊用 w 拉到頂</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>跨 region 同 vid 的法線方向必須一致，否則共邊處會裂開。累加再 normalize 是經典「角點外推」做法。屋簷垂下 + 外推一起做，遠看才有 A-frame 瓦片感。</p>
+        </article>
+      </div>
+
+      <!-- ====== § 3. SHADER ====== -->
+      <div class="code-group" id="code-shader">
+        <h3 class="code-group__title"><span class="code-group__num">§ 3</span> SHADER · 自寫 GLSL <small>4 套自訂 shader</small></h3>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">07</span>
+            <h4>Sky FBM Clouds · 天空飄移雲</h4>
+            <span class="code-card__live-tag">LIVE</span>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L91" target="_blank" rel="noopener">main.js:91 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <!-- 即時 mini 3D 場景：純天空 dome，無地形無建築，可拖曳旋轉看四周 -->
+            <div class="code-live" id="code-live-sky" data-live="sky" role="img" aria-label="即時 FBM 飄移雲示範">
+              <div class="code-live__hint">🖱 拖曳旋轉看四周</div>
+              <div class="code-live__badge">LIVE · 即時運算</div>
+            </div>
+            <pre class="code-snippet"><code class="lang-glsl">// 4 階 FBM：自然雲團
+float fbm(vec2 p) {
+  float v = 0.0, amp = 0.5;
+  for (int i = 0; i &lt; 4; i++) {
+    v += amp * vnoise(p);
+    p *= 2.07;  amp *= 0.55;
+  }
+  return v;
+}
+void main() {
+  float h = vDir.y;
+  // 高度漸層：地平線只佔窄一段、主要是藍天
+  vec3 col = (h &gt;= 0.0)
+    ? mix(uHorizon, uZenith, smoothstep(0.0, 0.18, h))
+    : mix(uHorizon, uGround, smoothstep(0.0, -0.15, h));
+
+  // 雲層：球面 lat/lon 當 noise 輸入
+  float az = atan(vDir.x, vDir.z), el = vDir.y;
+  vec2 cp = vec2(az * 1.4, el * 3.0);
+  cp.x += uTime * 0.04;                  // 雲團繞天飄移
+  float cloud = smoothstep(0.50, 0.62, fbm(cp * 1.2));
+  col = mix(col, uCloudColor, cloud * 0.95);
+  gl_FragColor = vec4(col, 1.0);
 }</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>4 階 FBM 比單層 noise 自然 5 倍；窄閾值（0.50→0.62）讓雲跟藍天邊界分明、不糊；<code>uTime * 0.04</code> 是雲團漂移速度，數值很小但日積月累就動了。</p>
         </article>
 
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">08</span>
+            <h4>Water Foam Ring · 動態波紋光暈</h4>
+            <span class="code-card__live-tag">LIVE</span>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1646" target="_blank" rel="noopener">main.js:1646 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <!-- 即時 mini 3D 場景：純水面 + 假島輪廓 + foam ring，無建築、可拖曳旋轉 -->
+            <div class="code-live" id="code-live-water" data-live="water" role="img" aria-label="即時動態波紋光暈示範">
+              <div class="code-live__hint">🖱 拖曳旋轉 · 滾輪縮放</div>
+              <div class="code-live__badge">LIVE · 即時運算</div>
+            </div>
+            <pre class="code-snippet"><code>const shape = new THREE.Shape(outerPath);   // 外緣（向外擴）
+const hole = new THREE.Path();
+for (const p of innerPath) hole.lineTo(p.x, p.z);   // 內緣貼建築
+shape.holes.push(hole);
+const geom = new THREE.ShapeGeometry(shape);
+geom.rotateX(Math.PI / 2);
+
+// radialT 屬性：outer=1（foam 邊緣淡出）、inner=0（貼牆最濃）
+const radialT = new Float32Array(posCount);
+for (let i = 0; i &lt; posCount; i++) {
+  radialT[i] = i &lt; outerCount ? 1.0 : 0.0;
+}
+geom.setAttribute('radialT', new THREE.Float32BufferAttribute(radialT, 1));
+
+// fragmentShader 內：uTime 驅動同心波擴散
+//   float wave = sin(dist * 8.0 - uTime * 2.0);
+//   float foam = step(0.7, wave) * (1.0 - radialT);
+const mesh = new THREE.Mesh(geom, _foamMat);</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>每棟建築一圈 foam ring（Shape + hole 環形 mesh）；自訂 <code>radialT</code> attribute 讓 fragment shader 知道每個頂點離建築多遠，uTime 驅動同心波 → 視覺效果像水拍上岸。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">09</span>
+            <h4>Roof Tile Shader · 屋頂瓦片圓點</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1961" target="_blank" rel="noopener">main.js:1961 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="shader-tile" alt="屋頂俯視瓦片" loading="lazy"/>
+              <figcaption>俯視：交錯圓點瓦片</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="shader-tile" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="shader-tile" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code class="lang-glsl">// world-space derivatives 推 face normal
+vec3 wN = normalize(cross(dFdx(vWPos), dFdy(vWPos)));
+float upN = abs(wN.y);
+float roofW = smoothstep(0.25, 0.55, upN);
+if (roofW &gt; 0.0) {
+  if (upN &gt; 0.95) {
+    // 嚴格水平面（floor/cornice 頂面）→ 方塊磚地板
+    vec2 t = vWPos.xz * 2.8;
+    vec2 local = fract(t);
+    float gap = smoothstep(0.0, 0.045, local.x) * smoothstep(1.0, 0.955, local.x)
+              * smoothstep(0.0, 0.045, local.y) * smoothstep(1.0, 0.955, local.y);
+    diffuseColor.rgb *= mix(0.62, 1.0, gap);
+  } else {
+    // 帶曲率屋頂 → 交錯圓點瓦片
+    vec2 t = vWPos.xz * uTileScale;
+    if (mod(floor(t.y), 2.0) &gt; 0.5) t.x += 0.5;
+    float d = length(fract(t) - 0.5);
+    float dot = smoothstep(0.44, 0.28, d);
+    diffuseColor.rgb *= (1.0 - dot * uTileStrength * roofW);
+  }
+}</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b><code>dFdx/dFdy</code> 從 world position 推 face normal，不需要 vNormal（flatShading 拿不到）。<code>upN &gt; 0.95</code> 自動分流：嚴格水平面 → 方塊磚、帶曲率屋頂 → 交錯圓點。一支 shader 兩種紋路。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">10</span>
+            <h4>Wall Pattern · 木紋 / 磚石</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1989" target="_blank" rel="noopener">main.js:1989 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="shader-wood" alt="牆面木紋立面" loading="lazy"/>
+              <figcaption>樓層水平木板紋</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="shader-wood" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="shader-wood" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code class="lang-glsl">// 垂直面（牆面）= |wN.y| 很小
+float wallW = smoothstep(0.30, 0.12, abs(wN.y));
+if (wallW &gt; 0.0) {
+  if (vWPos.y &lt; FOUNDATION_TOP) {
+    // 地基牆：磚石（交錯排列 + hash 亮度變化）
+    float row = floor(vWPos.y / 0.16);
+    float rowOffset = mod(row, 2.0) * 0.5;
+    float xLocal = fract(horizCoord / 0.32 + rowOffset);
+    float gap = smoothstep(0.0, 0.028, xLocal) * smoothstep(1.0, 0.972, xLocal);
+    float brickId = floor(horizCoord / 0.32 + rowOffset) * 13.0 + row * 7.31;
+    float bright = 0.92 + fract(sin(brickId * 12.9898) * 43758.5453) * 0.16;
+    diffuseColor.rgb *= mix(0.72, bright, gap);
+  } else {
+    // 樓層牆：水平木板紋
+    float stripe = fract(vWPos.y * uPlankScale);
+    float gap = smoothstep(0.0, 0.06, stripe) * smoothstep(1.0, 0.94, stripe);
+    diffuseColor.rgb *= (1.0 - (1.0 - gap) * uPlankStrength * wallW);
+  }
+}</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>同一支 shader 依牆高自動切換：<code>vWPos.y &lt; 0.3</code>（地基）→ 磚石、否則 → 水平木板。磚塊亮度用 hash（sin × 大常數）產生 → 看起來每塊磚都不一樣，但零記憶體開銷。</p>
+        </article>
       </div>
-      </details>
+
+      <!-- ====== § 4. DECORATION ====== -->
+      <div class="code-group" id="code-decoration">
+        <h3 class="code-group__title"><span class="code-group__num">§ 4</span> DECORATION · 裝飾自動生成 <small>3 個 snippet</small></h3>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">11</span>
+            <h4>Windows by Variant · 窗戶 hash 抽樣</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1106" target="_blank" rel="noopener">main.js:1106 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="deco-window" alt="建築立面窗戶" loading="lazy"/>
+              <figcaption>建築立面：3 種凹陷窗</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="deco-window" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="deco-window" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>const bucketsByVariant = [[], [], []];
+for (const cell of cells) {
+  const bid = buildingId.get(cell.id);
+  // 每棟建築固定一種 variant（hash 鎖定）
+  const variant = ((bid * 0x9E37 + 13) >>> 0) % _windowGeomVariants.length;
+  for (let lvl = 1; lvl &lt; cell.blocks.length; lvl++) {  // 跳過地基
+    for (let i = 0; i &lt; cell.vertIdx.length; i++) {
+      if (內部邊 || isDoorWall) continue;
+      const elen = Math.hypot(dx, dz);
+      const winCount = elen &gt; 1.4 ? 2 : 1;       // 長邊兩扇、短邊一扇
+      for (let k = 0; k &lt; winCount; k++) {
+        bucketsByVariant[variant].push({ x, y, z, rotY });
+      }
+    }
+  }
+}
+// 每個 variant 用 InstancedMesh 一次性繪製
+for (let v = 0; v &lt; 3; v++) {
+  const mesh = new THREE.InstancedMesh(_windowGeomVariants[v], _windowMat, insts.length);
+  windowsGroup.add(mesh);
+}</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>同棟風格統一靠 hash（bid → variant）鎖定；長邊 2 扇短邊 1 扇符合直覺；InstancedMesh 把上百扇窗併成 3 個 draw call。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">12</span>
+            <h4>Iron Railings · 鑄鐵欄杆</h4>
+            <span class="code-card__live-tag">LIVE</span>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1385" target="_blank" rel="noopener">main.js:1385 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <!-- 即時 mini 3D 場景：借用主場景已 build 的地基/cornice/railings mesh -->
+            <div class="code-live" id="code-live-railing" data-live="railing" role="img" aria-label="即時鑄鐵欄杆與地基示範">
+              <div class="code-live__hint">🖱 拖曳旋轉 · 滾輪縮放</div>
+              <div class="code-live__badge">LIVE · 即時運算</div>
+            </div>
+            <pre class="code-snippet"><code>for (const cell of cells) {
+  for (let i = 0; i &lt; N; i++) {
+    if (內部邊 || doorWalls.has(edgeKey)) continue;  // 大門邊讓出空間
+    // 欄杆放在 cornice 中間線（inner + outer / 2）
+    const mA = midpoint(cornInner[A], cornOuter[A]);
+    const mB = midpoint(cornInner[B], cornOuter[B]);
+
+    // 立柱：依邊長均分（每 30cm 一根）
+    const numPosts = Math.max(2, Math.round(elen / RAILING_POST_SPACING) + 1);
+    for (let p = 0; p &lt; numPosts; p++) {
+      const t = p / (numPosts - 1);
+      postInsts.push({ x: mA.x + ex*t, y: railingY, z: mA.z + ez*t });
+      finialInsts.push({ /* 立柱頂端小球 */ });
+    }
+    // 上下兩條橫桿
+    barInsts.push({ midX, midZ, length: elen, angle });
+  }
+}
+// 3 種幾何 × InstancedMesh：post / bar / finial</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>欄杆對齊 cornice「中間線」而非邊緣，從外看立柱站在紅磚正中、視覺最穩。3 種 geometry 各一個 InstancedMesh → 全島幾百根立柱只佔 3 個 draw call。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">13</span>
+            <h4>Cornice Band · 紅色簷口</h4>
+            <span class="code-card__live-tag">LIVE</span>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1796" target="_blank" rel="noopener">main.js:1796 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <!-- 即時 mini 3D 場景：完整地基（牆 + 地板 + 紅帶），無欄杆 -->
+            <div class="code-live" id="code-live-cornice" data-live="cornice" role="img" aria-label="即時紅色簷口與地基示範">
+              <div class="code-live__hint">🖱 拖曳旋轉 · 滾輪縮放</div>
+              <div class="code-live__badge">LIVE · 即時運算</div>
+            </div>
+            <pre class="code-snippet"><code>const yCorBot = FOUNDATION_TOP_Y - CORNICE_HEIGHT;   // 紅帶底 = 地板下 10cm
+const yCorTop = FOUNDATION_TOP_Y + CORNICE_RIM_HEIGHT; // 頂 = 地板上 4cm（rim）
+
+// 每條外露邊建一片：8 verts 包外推 12cm + 內推 4cm 形成立體 rim
+positions.push(
+  iA.x, yCorBot, iA.z,    // 0 inner-bot-A
+  iA.x, yCorTop, iA.z,    // 1 inner-top-A
+  cA.x, yCorTop, cA.z,    // 2 outer-top-A（向外 bulge 12cm）
+  cA.x, yCorBot, cA.z,    // 3 outer-bot-A
+  iB.x, yCorBot, iB.z,    // 4-7: B 端同樣 4 點
+  iB.x, yCorTop, iB.z,
+  cB.x, yCorTop, cB.z,
+  cB.x, yCorBot, cB.z,
+);
+// 顏色 = CORNICE_COLOR (#9c4838 brick red) × tint × AO
+// 此 mesh 獨立、不進 Loop subdivision → 保持銳利邊緣</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>yCorTop > 地板高度 4cm 形成 rim 突起、outer bulge 12cm 形成厚度感。獨立 mesh 跳過 subdivision 是關鍵：cornice 銳利邊緣是 Townscaper 視覺辨識度的核心元素。</p>
+        </article>
+      </div>
+
+      <!-- ====== § 5. INTERACTION ====== -->
+      <div class="code-group" id="code-interaction">
+        <h3 class="code-group__title"><span class="code-group__num">§ 5</span> INTERACTION · 互動與效能 <small>2 個 snippet</small></h3>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">14</span>
+            <h4>handleClick · 三類點擊判定</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2670" target="_blank" rel="noopener">main.js:2670 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="interact-click" alt="hover 視角" loading="lazy"/>
+              <figcaption>滑鼠互動視角</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="interact-click" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="interact-click" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>function handleClick(ev, isRight) {
+  const hit = pick(ev.clientX, ev.clientY);   // Raycaster 命中
+  if (!hit) return;
+  const ud = hit.object.userData;
+
+  if (isRight) {                              // 右鍵移除頂層
+    if (ud.type === 'column' || ud.type === 'foundation_top') {
+      removeTopBlock(closestCellAt(hit.point.x, hit.point.z));
+    }
+    return;
+  }
+  if (ud.type === 'ground') return addBlock(ud.cellId, 0);   // 空地 → 地基
+  if (ud.type === 'foundation_top') {
+    return addBlock(cellId, cells[cellId].blocks.length);    // 地基頂 → 疊樓
+  }
+  if (ud.type === 'column') {
+    const wallTop = cellTopY(cells[cellId]);
+    // 屋頂三角化讓 normal 不可靠 → 改用 hit.point.y 判定
+    if (hit.point.y &gt; wallTop - 0.05) {
+      addBlock(cellId, cells[cellId].blocks.length);         // 屋頂區域 → 疊
+    } else {
+      // 牆面 → 朝 normal 外側推 0.6 找鄰格
+      const target = closestCellAt(p.x + n.x*0.6, p.z + n.z*0.6);
+      addBlock(target, cells[target].blocks.length);
+    }
+  }
+}</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>屋頂三角化導致法線方向混亂（朝下底面、水平側壁都摻在一起），純看 <code>n.y</code> 會誤判。改用 <code>hit.point.y &gt; wallTop</code> 判定「屋頂區域」，誤判率歸零。</p>
+        </article>
+
+        <article class="code-card">
+          <header class="code-card__head">
+            <span class="code-card__num">15</span>
+            <h4>dt-based Loop + 陰影按需更新 · 60fps</h4>
+            <a class="code-card__src" href="https://github.com/ufo23005/blocktown/blob/main/main.js#L3161" target="_blank" rel="noopener">main.js:3161 ↗</a>
+          </header>
+          <div class="code-card__body">
+            <figure class="code-shot">
+              <img data-shot="menu-orbit" alt="選單繞鏡頭視角" loading="lazy"/>
+              <figcaption>選單繞鏡頭模式</figcaption>
+              <div class="code-shot__btns">
+                <button class="code-mini-btn" data-reshoot="menu-orbit" title="重新截圖">🔄</button>
+                <button class="code-mini-btn" data-download="menu-orbit" title="下載 JPEG">💾</button>
+              </div>
+            </figure>
+            <pre class="code-snippet"><code>function animate() {
+  requestAnimationFrame(animate);
+  const _now = performance.now();
+  const dt = Math.min(MAX_DT, (_now - _lastFrameT) / 1000);  // dt clamp 避免大跳
+  _lastFrameT = _now;
+
+  if (menuMode) {
+    menuOrbitT += MENU_ORBIT_SPEED * dt;       // dt-based 而非每幀固定 → 牆鐘等速
+    camera.position.set(
+      Math.cos(menuOrbitT) * MENU_ORBIT_RADIUS,
+      MENU_ORBIT_HEIGHT,
+      Math.sin(menuOrbitT) * MENU_ORBIT_RADIUS,
+    );
+  } else { /* 平滑追焦 lerp 至 focus target */ }
+
+  // sun.shadow.autoUpdate=false（初始化時設定）
+  //   → 場景靜止時不重算 shadow map，省 5-30ms/frame
+  //   → 場景變動 (addBlock / shuffle) 時 flag needsUpdate=true
+
+  // PROJECT INFO overlay 全黑時 canvas 完全被擋住
+  //   → 跳過整個 composer.render() pipeline 省 GPU
+  const canvasObscured = !infoScreen.classList.contains('hidden');
+  if (!canvasObscured) {
+    if (composer) composer.render(); else renderer.render(scene, camera);
+  }
+}</code></pre>
+          </div>
+          <p class="code-card__why"><b>Why：</b>三層省：(1) dt-based 保證所有動畫不隨 fps 飄、(2) shadow autoUpdate=false 場景靜止時省 GPU 5-30ms、(3) PROJECT INFO 開啟時 canvas 被遮蓋直接跳過整個 render pipeline。</p>
+        </article>
+      </div>
     </section>
 
     <!-- 功能亮點（精選 8 條，反映最新實作） -->
@@ -1025,7 +1564,7 @@ if (roofW &gt; 0.0) {
       <button class="modal-close" data-close>✕</button>
     </div>
     <div class="modal-body about-body">
-      <p>《小鎮建築師 Blocktown》是一款受 <b>Oskar Stålberg</b> 的 <i>Townscaper</i> 啟發的瀏覽器小鎮建築玩具。</p>
+      <p>《Blocktown》是一款受 <b>Oskar Stålberg</b> 的 <i>Townscaper</i> 啟發的瀏覽器小鎮建築玩具。</p>
       <p>使用程序生成的不規則格網、Loop subdivision 圓潤化與自訂 Shader 天空，重現 Townscaper 那種療癒的奶油北歐配色。</p>
       <div class="tech-row">
         <span class="tech-chip">Three.js</span>

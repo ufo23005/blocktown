@@ -3057,17 +3057,841 @@ function captureLivePreview() {
   }
 }
 
+// ===== 核心程式碼 section：自動截圖系統 =====
+// 開 PROJECT INFO 時為 15 個 snippet 各拍一張 inline JPEG，每張卡支援 🔄 重拍 / 💾 下載
+// 鏡頭預設座標：對齊「demo town 中心 ≈ 原點、建築 y=0..4、地基 y=-1..0.3」
+const SHOT_PRESETS = {
+  'terrain-overview':   { pos: [0.5,  32,  0.5],  target: [0,  0.0, 0], fov: 32 },
+  'terrain-smooth':     { pos: [4.0,  10,  4.0],  target: [0,  0.5, 0], fov: 24 },
+  'terrain-component':  { pos: [18,   26,  18],   target: [0,  0.0, 0], fov: 28 },
+  'building-puffy':     { pos: [6.0,   5,   8.0], target: [0,  2.0, 0], fov: 28 },
+  'building-roof-apex': { pos: [4.0,   7,   4.0], target: [0,  3.0, 0], fov: 26 },
+  'building-overhang':  { pos: [8.0,   3,   0.5], target: [0,  2.5, 0], fov: 24 },
+  'shader-sky':         { pos: [0,     6,   18],  target: [0, 18.0, 0], fov: 60 },
+  'shader-water':       { pos: [16,    1.2, 16],  target: [0, -0.4, 0], fov: 28 },
+  'shader-tile':        { pos: [4.0,   9,   4.0], target: [0,  1.5, 0], fov: 22 },
+  'shader-wood':        { pos: [6.0,   2,   0.5], target: [0,  2.0, 0], fov: 22 },
+  'deco-window':        { pos: [5.0,   2.5, 0.5], target: [0,  1.7, 0], fov: 22 },
+  'deco-railing':       { pos: [7.0,   0.8, 0.5], target: [0,  0.4, 0], fov: 26 },
+  'deco-cornice':       { pos: [8.0,   0.0, 0.5], target: [0, -0.2, 0], fov: 28 },
+  'interact-click':     { pos: [10,    8,   10],  target: [0,  1.5, 0], fov: 30 },
+  'menu-orbit':         { pos: [22,   18,   22],  target: [0,  2.0, 0], fov: 32 },
+};
+
+let _capturingShots = false;
+let _shotsCaptured = false;       // 一次 openInfo 只自動拍一次
+
+function _renderOnce() {
+  if (composer) composer.render(); else renderer.render(scene, camera);
+}
+
+// 截一張：camera 設好 → render 兩幀（讓 shadow map 跟上）→ toDataURL 填入 img
+async function captureShot(shotId) {
+  const preset = SHOT_PRESETS[shotId];
+  if (!preset) return;
+  // 若該 shot 已被替換為 live 3D 場景（無對應 <img>），跳過省一輪 render
+  const targets = document.querySelectorAll(`img[data-shot="${shotId}"]`);
+  if (!targets.length) return;
+  camera.position.set(preset.pos[0], preset.pos[1], preset.pos[2]);
+  controls.target.set(preset.target[0], preset.target[1], preset.target[2]);
+  if (preset.fov && Math.abs(camera.fov - preset.fov) > 1e-3) {
+    camera.fov = preset.fov;
+    camera.updateProjectionMatrix();
+  }
+  camera.lookAt(controls.target);
+  sun.shadow.needsUpdate = true;
+  _renderOnce();
+  _renderOnce();
+  try {
+    const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.82);
+    document.querySelectorAll(`img[data-shot="${shotId}"]`).forEach(img => {
+      img.src = dataUrl;
+    });
+  } catch (e) {
+    console.warn('captureShot 失敗', shotId, e);
+  }
+}
+
+// 暫存 + 還原 camera state 的包裝（reshoot 與 captureAll 共用）
+async function _withCameraSaved(fn) {
+  const oldPos = camera.position.clone();
+  const oldTarget = controls.target.clone();
+  const oldFov = camera.fov;
+  const wasShadowAuto = sun.shadow.autoUpdate;
+  sun.shadow.autoUpdate = false;
+  try {
+    await fn();
+  } finally {
+    camera.position.copy(oldPos);
+    controls.target.copy(oldTarget);
+    if (Math.abs(camera.fov - oldFov) > 1e-3) {
+      camera.fov = oldFov;
+      camera.updateProjectionMatrix();
+    }
+    camera.lookAt(controls.target);
+    sun.shadow.autoUpdate = wasShadowAuto;
+    sun.shadow.needsUpdate = true;
+  }
+}
+
+// 一次拍齊 15 張
+async function captureAllShots() {
+  if (_capturingShots) return;
+  _capturingShots = true;
+  await _withCameraSaved(async () => {
+    for (const shotId of Object.keys(SHOT_PRESETS)) {
+      await captureShot(shotId);
+      // yield 給瀏覽器，避免 UI 完全卡死
+      await new Promise(r => setTimeout(r, 0));
+    }
+  });
+  _capturingShots = false;
+  _shotsCaptured = true;
+}
+
+// ===== 動態波紋光暈 LIVE DEMO =====
+// 獨立 mini Three.js 場景（不依賴主場景），純水面 + 假島輪廓 + foam ring
+// 只在 PROJECT INFO 開啟時跑 RAF，關閉時 cancelAnimationFrame 節省 GPU
+let _liveWater = null;       // { renderer, scene, camera, controls, foamMat, observer }
+let _liveWaterRAF = 0;
+let _liveWaterRunning = false;
+
+function _initLiveWaterDemo() {
+  if (_liveWater) return;
+  const container = document.getElementById('code-live-water');
+  if (!container) return;
+
+  const w = container.clientWidth || 320;
+  const h = container.clientHeight || Math.round(w * 11 / 16);
+
+  // (1) 獨立 renderer
+  //   pixelRatio 鎖 1：小 demo 不需要 retina、能省 4× GPU 記憶體（740×507 vs 1480×1014）
+  //   powerPreference low-power：Mac 雙 GPU 環境下優先用整合 GPU、減少 Safari 因記憶體壓力 kill tab
+  const r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  r.setPixelRatio(1);
+  r.setSize(w, h);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(r.domElement);
+
+  // contextlost handler：Safari 記憶體壓力下 GPU 可能 lose context
+  r.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('[live-water] WebGL context lost');
+    _liveWaterRunning = false;
+  });
+
+  // (2) 場景與相機
+  const s = new THREE.Scene();
+  s.background = new THREE.Color('#0c2030');
+  s.fog = new THREE.Fog('#0c2030', 8, 30);
+
+  const cam = new THREE.PerspectiveCamera(38, w / h, 0.1, 80);
+  cam.position.set(0, 3.2, 5.0);
+
+  const ctl = new OrbitControls(cam, r.domElement);
+  ctl.enableDamping = true;
+  ctl.dampingFactor = 0.12;
+  ctl.minDistance = 2.5;
+  ctl.maxDistance = 9;
+  ctl.maxPolarAngle = Math.PI * 0.46;       // 不能看水底
+  ctl.minPolarAngle = Math.PI * 0.05;       // 也不能完全頂視
+  ctl.enablePan = false;                    // 鎖中心不准平移
+  ctl.target.set(0, 0, 0);
+  ctl.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: null, RIGHT: null };
+  ctl.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY };
+
+  // (3) 環境光（簡單足夠）
+  s.add(new THREE.HemisphereLight('#bfd6ee', '#445566', 0.7));
+  s.add(new THREE.AmbientLight('#ffffff', 0.30));
+
+  // (4) 水面：徑向漸層（與主場景同色系，但獨立 material 不依賴）
+  const waterGeom = new THREE.PlaneGeometry(40, 40, 1, 1);
+  waterGeom.rotateX(-Math.PI / 2);
+  const waterMat = new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec3 vWP;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWP = wp.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vWP;
+      void main() {
+        vec3 deep = vec3(0.055, 0.20, 0.251);
+        vec3 edge = vec3(0.122, 0.302, 0.361);
+        float d = length(vWP.xz);
+        vec3 col = mix(deep, edge, smoothstep(0.0, 14.0, d));
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+  const water = new THREE.Mesh(waterGeom, waterMat);
+  water.position.y = 0;
+  s.add(water);
+
+  // (5) 假島輪廓（不規則 9 邊形，模擬地基外輪廓）
+  const N = 9;
+  const RADIUS_INNER = 1.35;
+  const RING_WIDTH = 0.85;     // foam ring 寬度比主場景 FOAM_RADIUS=0.55 稍大、看得更清楚
+  const innerPath = [];
+  const outerPath = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const wobble = 1 + Math.sin(a * 3 + 0.7) * 0.10 + Math.cos(a * 2.3) * 0.06;
+    const rIn = RADIUS_INNER * wobble;
+    const rOut = (RADIUS_INNER + RING_WIDTH) * wobble;
+    innerPath.push({ x: Math.cos(a) * rIn, z: Math.sin(a) * rIn });
+    outerPath.push({ x: Math.cos(a) * rOut, z: Math.sin(a) * rOut });
+  }
+
+  // (6) Foam ring：Shape(outer) + hole(inner)，同主場景做法
+  const shape = new THREE.Shape(outerPath.map(p => new THREE.Vector2(p.x, p.z)));
+  const hole = new THREE.Path();
+  hole.moveTo(innerPath[0].x, innerPath[0].z);
+  for (let i = 1; i < innerPath.length; i++) hole.lineTo(innerPath[i].x, innerPath[i].z);
+  hole.closePath();
+  shape.holes.push(hole);
+  const foamGeom = new THREE.ShapeGeometry(shape);
+  foamGeom.rotateX(Math.PI / 2);
+  foamGeom.translate(0, 0.015, 0);
+  // radialT: outer verts = 1（最外、淡出）；hole verts = 0（貼島、最濃）
+  const outerCount = outerPath.length;
+  const posCount = foamGeom.attributes.position.count;
+  const radialT = new Float32Array(posCount);
+  for (let i = 0; i < posCount; i++) radialT[i] = i < outerCount ? 1.0 : 0.0;
+  foamGeom.setAttribute('radialT', new THREE.Float32BufferAttribute(radialT, 1));
+
+  // 複製 foam material 但給獨立 uniforms，自有 uTime 不受主場景影響
+  const foamMat = _foamMat.clone();
+  foamMat.uniforms = THREE.UniformsUtils.clone(_foamMat.uniforms);
+  foamMat.uniforms.uInnerAlpha.value = 0.78;     // 稍微更亮一點，讓 demo 更明顯
+  const foam = new THREE.Mesh(foamGeom, foamMat);
+  s.add(foam);
+
+  // (7) 假島面板：在 inner path 內鋪一片深色 mesh 代表「建築底」
+  //     讓使用者一眼看出 foam ring 是繞著某個輪廓，但又不喧賓奪主
+  const islandShape = new THREE.Shape(innerPath.map(p => new THREE.Vector2(p.x, p.z)));
+  const islandGeom = new THREE.ShapeGeometry(islandShape);
+  islandGeom.rotateX(Math.PI / 2);
+  islandGeom.translate(0, 0.008, 0);
+  const islandMat = new THREE.MeshBasicMaterial({
+    color: 0x0a1822,
+    transparent: true,
+    opacity: 0.92,
+  });
+  const island = new THREE.Mesh(islandGeom, islandMat);
+  s.add(island);
+
+  // (8) ResizeObserver：容器尺寸變化時即時調 aspect
+  const ro = new ResizeObserver(() => {
+    const nw = container.clientWidth;
+    const nh = container.clientHeight;
+    if (nw && nh) {
+      cam.aspect = nw / nh;
+      cam.updateProjectionMatrix();
+      r.setSize(nw, nh, false);
+    }
+  });
+  ro.observe(container);
+
+  // (9) 首次互動後讓 hint 淡出
+  const touched = () => container.classList.add('is-touched');
+  r.domElement.addEventListener('pointerdown', touched, { once: true });
+  r.domElement.addEventListener('wheel', touched, { once: true, passive: true });
+
+  _liveWater = { renderer: r, scene: s, camera: cam, controls: ctl, foamMat, observer: ro, container };
+}
+
+function _animateLiveWater() {
+  if (!_liveWaterRunning) return;
+  _liveWaterRAF = requestAnimationFrame(_animateLiveWater);
+  const lw = _liveWater;
+  if (!lw) return;
+  lw.controls.update();
+  lw.foamMat.uniforms.uTime.value = performance.now() * 0.001;
+  lw.renderer.render(lw.scene, lw.camera);
+}
+
+function startLiveWaterDemo() {
+  _initLiveWaterDemo();
+  if (!_liveWater) return;
+  _attachLiveVisibilityObserver(_liveWater.container, (visible) => {
+    if (visible) {
+      if (_liveWaterRunning) return;
+      _liveWaterRunning = true;
+      _animateLiveWater();
+    } else {
+      _liveWaterRunning = false;
+      if (_liveWaterRAF) { cancelAnimationFrame(_liveWaterRAF); _liveWaterRAF = 0; }
+    }
+  });
+}
+
+function stopLiveWaterDemo() {
+  _liveWaterRunning = false;
+  if (_liveWaterRAF) {
+    cancelAnimationFrame(_liveWaterRAF);
+    _liveWaterRAF = 0;
+  }
+  _detachLiveVisibilityObserver(_liveWater?.container);
+}
+
+// ===== 天空 FBM 雲 LIVE DEMO =====
+// 獨立 mini 場景：只有 sky dome、無地形無建築
+// camera 站在球心附近，拖曳即「看不同方向」（first-person look-around 風格）
+let _liveSky = null;        // { renderer, scene, camera, controls, skyMat, observer }
+let _liveSkyRAF = 0;
+let _liveSkyRunning = false;
+
+function _initLiveSkyDemo() {
+  if (_liveSky) return;
+  const container = document.getElementById('code-live-sky');
+  if (!container) return;
+
+  const w = container.clientWidth || 320;
+  const h = container.clientHeight || Math.round(w * 11 / 16);
+
+  // (1) 獨立 renderer
+  //   pixelRatio 鎖 1 + low-power：減少 GPU 記憶體壓力，避免 Safari kill tab 觸發頁面刷新
+  const r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  r.setPixelRatio(1);
+  r.setSize(w, h);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(r.domElement);
+
+  // contextlost handler
+  r.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('[live-sky] WebGL context lost');
+    _liveSkyRunning = false;
+  });
+
+  // (2) 場景
+  const s = new THREE.Scene();
+
+  // (3) Camera：站在球心附近、看 +x 方向（避開 atan2 seam）
+  //     OrbitControls 公轉時 camera 在小範圍內位移，sky dome 半徑遠大於此 → 視覺上等同 look-around
+  //     Sky shader 用 atan2(vDir.x, vDir.z) 當 noise UV，在 (x=0, z<0) 方向有 ±π 接縫
+  //     預設 camera 站 -x 軸、target +x，forward = +x → atan2(1,0)=π/2，遠離接縫
+  const cam = new THREE.PerspectiveCamera(50, w / h, 0.1, 600);
+  cam.position.set(-0.5, 0, 0);
+
+  const ctl = new OrbitControls(cam, r.domElement);
+  ctl.enableDamping = true;
+  ctl.dampingFactor = 0.10;
+  ctl.enableZoom = false;       // sky dome 內縮放沒意義
+  ctl.enablePan = false;
+  ctl.minPolarAngle = Math.PI * 0.12;   // 不要正對天頂（noise UV 在極點會奇異）
+  ctl.maxPolarAngle = Math.PI * 0.78;   // 不要看到 dome 底（會是 ground 色帶）
+  // 限制方位角到 ±150°，永遠看不到 ±180° 的 atan2 seam
+  ctl.minAzimuthAngle = -Math.PI * 0.83;
+  ctl.maxAzimuthAngle =  Math.PI * 0.83;
+  ctl.target.set(0, 0, 0);
+  ctl.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: null, RIGHT: null };
+  ctl.touches = { ONE: THREE.TOUCH.ROTATE, TWO: null };
+  // 速度感調慢一點：sky look-around 不需要轉太快
+  ctl.rotateSpeed = 0.35;
+
+  // (4) Sky dome：複製主場景的 skyMaterial 程式碼，但獨立 uniforms
+  //     直接 clone 會共用 uniforms 物件 → 改用 UniformsUtils.clone 隔離
+  const skyMat = skyMaterial.clone();
+  skyMat.uniforms = THREE.UniformsUtils.clone(skyMaterial.uniforms);
+  // 預設與主場景同色；如想 demo 中更突出可微調
+  // skyMat.uniforms.uCloudColor.value.set('#fffefa');
+
+  const skyGeom = new THREE.SphereGeometry(380, 48, 24);
+  const sky = new THREE.Mesh(skyGeom, skyMat);
+  s.add(sky);
+
+  // (5) ResizeObserver
+  const ro = new ResizeObserver(() => {
+    const nw = container.clientWidth;
+    const nh = container.clientHeight;
+    if (nw && nh) {
+      cam.aspect = nw / nh;
+      cam.updateProjectionMatrix();
+      r.setSize(nw, nh, false);
+    }
+  });
+  ro.observe(container);
+
+  // (6) 首次互動後 hint 淡出
+  const touched = () => container.classList.add('is-touched');
+  r.domElement.addEventListener('pointerdown', touched, { once: true });
+
+  _liveSky = { renderer: r, scene: s, camera: cam, controls: ctl, skyMat, observer: ro, container };
+}
+
+function _animateLiveSky() {
+  if (!_liveSkyRunning) return;
+  _liveSkyRAF = requestAnimationFrame(_animateLiveSky);
+  const lk = _liveSky;
+  if (!lk) return;
+  lk.controls.update();
+  lk.skyMat.uniforms.uTime.value = performance.now() * 0.001;
+  lk.renderer.render(lk.scene, lk.camera);
+}
+
+function startLiveSkyDemo() {
+  _initLiveSkyDemo();
+  if (!_liveSky) return;
+  _attachLiveVisibilityObserver(_liveSky.container, (visible) => {
+    if (visible) {
+      if (_liveSkyRunning) return;
+      _liveSkyRunning = true;
+      _animateLiveSky();
+    } else {
+      _liveSkyRunning = false;
+      if (_liveSkyRAF) { cancelAnimationFrame(_liveSkyRAF); _liveSkyRAF = 0; }
+    }
+  });
+}
+
+function stopLiveSkyDemo() {
+  _liveSkyRunning = false;
+  if (_liveSkyRAF) {
+    cancelAnimationFrame(_liveSkyRAF);
+    _liveSkyRAF = 0;
+  }
+  _detachLiveVisibilityObserver(_liveSky?.container);
+}
+
+// ===== 鑄鐵欄杆 LIVE DEMO =====
+// 借用主場景已 build 的 foundationFloorsMesh / foundationCornicesMesh / railing*Inst
+// 共用 geometry + material（不 clone instance），確保「跟遊戲內生成方式完全一樣」
+// 每次 start 時 refresh wrapper，防主場景 rebuild 後指向 disposed mesh
+let _liveRailing = null;        // { renderer, scene, camera, controls, container, group }
+let _liveRailingRAF = 0;
+let _liveRailingRunning = false;
+
+function _initLiveRailingDemo() {
+  if (_liveRailing) return;
+  const container = document.getElementById('code-live-railing');
+  if (!container) return;
+
+  const w = container.clientWidth || 320;
+  const h = container.clientHeight || Math.round(w * 11 / 16);
+
+  // (1) Renderer
+  //   shadowMap.enabled = true：buildingMaterial 的 injectBlockShader 注入 `vWPos = worldPosition.xyz`，
+  //   而 worldPosition 只在 USE_SHADOWMAP / USE_ENVMAP 等 define 下宣告。mini scene 沒 shadow 會 compile fail。
+  //   讓 directional light castShadow=true 即可 trigger USE_SHADOWMAP define，shadow map 512² 很輕。
+  const r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  r.setPixelRatio(1);
+  r.setSize(w, h);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.05;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  container.appendChild(r.domElement);
+  r.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('[live-railing] WebGL context lost');
+    _liveRailingRunning = false;
+  });
+
+  // (2) Scene：海面色背景 + 同主場景的霧
+  const s = new THREE.Scene();
+  s.background = new THREE.Color('#2c4651');
+  s.fog = new THREE.Fog('#2c4651', 12, 28);
+
+  // (3) 簡單水面（不要 foam，焦點在欄杆）
+  const waterGeom = new THREE.PlaneGeometry(60, 60, 1, 1);
+  waterGeom.rotateX(-Math.PI / 2);
+  const waterMat = new THREE.MeshBasicMaterial({ color: 0x1f4d5c });
+  const water = new THREE.Mesh(waterGeom, waterMat);
+  water.position.y = WATER_Y;
+  s.add(water);
+
+  // (4) 光照（小 shadow map 512² 省 GPU；hemisphere + ambient + directional 與主場景同色系）
+  s.add(new THREE.HemisphereLight('#bfd6ee', '#7a6a50', 0.70));
+  s.add(new THREE.AmbientLight('#ffffff', 0.30));
+  const sun = new THREE.DirectionalLight('#fff3d8', 1.20);
+  sun.position.set(8, 12, 6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(512, 512);
+  sun.shadow.camera.near = 0.5;
+  sun.shadow.camera.far = 30;
+  const sh = 12;
+  sun.shadow.camera.left = -sh;
+  sun.shadow.camera.right = sh;
+  sun.shadow.camera.top = sh;
+  sun.shadow.camera.bottom = -sh;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.autoUpdate = false;   // 場景靜止，手動 needsUpdate 一次就夠
+  sun.shadow.needsUpdate = true;
+  s.add(sun);
+
+  // (5) 借用主場景 mesh：用 Group 包起來方便 refresh
+  const borrowedGroup = new THREE.Group();
+  s.add(borrowedGroup);
+
+  // (6) Camera：對著島中央外圍特寫，能看到地基頂、紅帶、欄杆
+  //     從外面斜俯角看一段欄杆，距離適中
+  const cam = new THREE.PerspectiveCamera(32, w / h, 0.1, 80);
+  cam.position.set(7, 1.5, 7);
+
+  const ctl = new OrbitControls(cam, r.domElement);
+  ctl.enableDamping = true;
+  ctl.dampingFactor = 0.10;
+  ctl.minDistance = 3;
+  ctl.maxDistance = 16;
+  ctl.maxPolarAngle = Math.PI * 0.49;     // 不能看到水下
+  ctl.minPolarAngle = Math.PI * 0.10;
+  ctl.target.set(0, 0.3, 0);
+  ctl.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: null, RIGHT: null };
+  ctl.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY };
+
+  // (7) ResizeObserver
+  const ro = new ResizeObserver(() => {
+    const nw = container.clientWidth;
+    const nh = container.clientHeight;
+    if (nw && nh) {
+      cam.aspect = nw / nh;
+      cam.updateProjectionMatrix();
+      r.setSize(nw, nh, false);
+    }
+  });
+  ro.observe(container);
+
+  // (8) 首次互動 hint 淡出
+  const touched = () => container.classList.add('is-touched');
+  r.domElement.addEventListener('pointerdown', touched, { once: true });
+  r.domElement.addEventListener('wheel', touched, { once: true, passive: true });
+
+  _liveRailing = { renderer: r, scene: s, camera: cam, controls: ctl, group: borrowedGroup, observer: ro, container };
+}
+
+// 每次 start 都把主場景最新的 mesh wrapper 重建到 mini scene
+// （主場景 rebuild 後舊 geom 已 dispose，wrapper 必須更新）
+function _refreshLiveRailingMeshes() {
+  if (!_liveRailing) return;
+  const g = _liveRailing.group;
+  // 移除舊 wrapper（geom/material 共用主場景，不能 dispose）
+  while (g.children.length) g.remove(g.children[0]);
+
+  // 地基頂面：陶磚地板
+  if (foundationFloorsMesh && foundationFloorsMesh.geometry) {
+    g.add(new THREE.Mesh(foundationFloorsMesh.geometry, foundationFloorsMesh.material));
+  }
+  // 紅色 cornice 帶
+  if (foundationCornicesMesh && foundationCornicesMesh.geometry) {
+    g.add(new THREE.Mesh(foundationCornicesMesh.geometry, foundationCornicesMesh.material));
+  }
+  // 立柱 InstancedMesh
+  if (railingPostInst && railingPostInst.count > 0) {
+    const m = new THREE.InstancedMesh(railingPostInst.geometry, railingPostInst.material, railingPostInst.count);
+    m.instanceMatrix.array.set(railingPostInst.instanceMatrix.array);
+    m.instanceMatrix.needsUpdate = true;
+    g.add(m);
+  }
+  // 橫桿 InstancedMesh
+  if (railingBarInst && railingBarInst.count > 0) {
+    const m = new THREE.InstancedMesh(railingBarInst.geometry, railingBarInst.material, railingBarInst.count);
+    m.instanceMatrix.array.set(railingBarInst.instanceMatrix.array);
+    m.instanceMatrix.needsUpdate = true;
+    g.add(m);
+  }
+  // 立柱頂端小球
+  if (railingFinialInst && railingFinialInst.count > 0) {
+    const m = new THREE.InstancedMesh(railingFinialInst.geometry, railingFinialInst.material, railingFinialInst.count);
+    m.instanceMatrix.array.set(railingFinialInst.instanceMatrix.array);
+    m.instanceMatrix.needsUpdate = true;
+    g.add(m);
+  }
+}
+
+function _animateLiveRailing() {
+  if (!_liveRailingRunning) return;
+  _liveRailingRAF = requestAnimationFrame(_animateLiveRailing);
+  const lr = _liveRailing;
+  if (!lr) return;
+  lr.controls.update();
+  lr.renderer.render(lr.scene, lr.camera);
+}
+
+function startLiveRailingDemo() {
+  _initLiveRailingDemo();
+  if (!_liveRailing) return;
+  _refreshLiveRailingMeshes();
+  _attachLiveVisibilityObserver(_liveRailing.container, (visible) => {
+    if (visible) {
+      if (_liveRailingRunning) return;
+      _liveRailingRunning = true;
+      _animateLiveRailing();
+    } else {
+      _liveRailingRunning = false;
+      if (_liveRailingRAF) { cancelAnimationFrame(_liveRailingRAF); _liveRailingRAF = 0; }
+    }
+  });
+}
+
+function stopLiveRailingDemo() {
+  _liveRailingRunning = false;
+  if (_liveRailingRAF) {
+    cancelAnimationFrame(_liveRailingRAF);
+    _liveRailingRAF = 0;
+  }
+  _detachLiveVisibilityObserver(_liveRailing?.container);
+}
+
+// ===== 紅色簷口 LIVE DEMO =====
+// 借用主場景 mesh：buildingMeshes (含地基牆) + foundationFloorsMesh + foundationCornicesMesh
+// 「整個地基」概念：含側面牆 + 頂面地板 + 紅色 cornice 帶；不顯示欄杆
+// camera 拉近一段邊緣特寫，紅帶為視覺主角
+let _liveCornice = null;
+let _liveCorniceRAF = 0;
+let _liveCorniceRunning = false;
+
+function _initLiveCorniceDemo() {
+  if (_liveCornice) return;
+  const container = document.getElementById('code-live-cornice');
+  if (!container) return;
+
+  const w = container.clientWidth || 320;
+  const h = container.clientHeight || Math.round(w * 11 / 16);
+
+  const r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+  r.setPixelRatio(1);
+  r.setSize(w, h);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.05;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  container.appendChild(r.domElement);
+  r.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('[live-cornice] WebGL context lost');
+    _liveCorniceRunning = false;
+  });
+
+  const s = new THREE.Scene();
+  s.background = new THREE.Color('#2c4651');
+  s.fog = new THREE.Fog('#2c4651', 14, 32);
+
+  // 水面
+  const waterGeom = new THREE.PlaneGeometry(60, 60, 1, 1);
+  waterGeom.rotateX(-Math.PI / 2);
+  const waterMat = new THREE.MeshBasicMaterial({ color: 0x1f4d5c });
+  const water = new THREE.Mesh(waterGeom, waterMat);
+  water.position.y = WATER_Y;
+  s.add(water);
+
+  // 光照
+  s.add(new THREE.HemisphereLight('#bfd6ee', '#7a6a50', 0.70));
+  s.add(new THREE.AmbientLight('#ffffff', 0.30));
+  const sun = new THREE.DirectionalLight('#fff3d8', 1.20);
+  sun.position.set(8, 12, 6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(512, 512);
+  sun.shadow.camera.near = 0.5;
+  sun.shadow.camera.far = 30;
+  const sh = 12;
+  sun.shadow.camera.left = -sh;
+  sun.shadow.camera.right = sh;
+  sun.shadow.camera.top = sh;
+  sun.shadow.camera.bottom = -sh;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.autoUpdate = false;
+  sun.shadow.needsUpdate = true;
+  s.add(sun);
+
+  const borrowedGroup = new THREE.Group();
+  s.add(borrowedGroup);
+
+  // Camera：站在島外、視線略低過紅帶高度（cornice 在 y≈0.3），紅帶占畫面比例大
+  //   原本 (5.5, 1.0, 5.5) 太近、容易卡在建築物內部
+  const cam = new THREE.PerspectiveCamera(30, w / h, 0.1, 80);
+  cam.position.set(11, 1.6, 11);
+
+  const ctl = new OrbitControls(cam, r.domElement);
+  ctl.enableDamping = true;
+  ctl.dampingFactor = 0.10;
+  ctl.minDistance = 6;            // 不允許太近，避免卡進建築內
+  ctl.maxDistance = 18;
+  ctl.maxPolarAngle = Math.PI * 0.49;
+  ctl.minPolarAngle = Math.PI * 0.18;
+  ctl.target.set(0, 0.3, 0);      // 對著島中央 cornice 高度
+  ctl.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: null, RIGHT: null };
+  ctl.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY };
+
+  const ro = new ResizeObserver(() => {
+    const nw = container.clientWidth;
+    const nh = container.clientHeight;
+    if (nw && nh) {
+      cam.aspect = nw / nh;
+      cam.updateProjectionMatrix();
+      r.setSize(nw, nh, false);
+    }
+  });
+  ro.observe(container);
+
+  const touched = () => container.classList.add('is-touched');
+  r.domElement.addEventListener('pointerdown', touched, { once: true });
+  r.domElement.addEventListener('wheel', touched, { once: true, passive: true });
+
+  _liveCornice = { renderer: r, scene: s, camera: cam, controls: ctl, group: borrowedGroup, observer: ro, container };
+}
+
+// 借用主場景：所有建築 (含地基牆) + 地板 + 紅帶。不加欄杆
+function _refreshLiveCorniceMeshes() {
+  if (!_liveCornice) return;
+  const g = _liveCornice.group;
+  while (g.children.length) g.remove(g.children[0]);
+
+  // 所有建築 mesh（含地基側面牆 + 樓層 + 屋頂）
+  // 樓層在背後當背景，主角是紅帶
+  for (const [bid, bMesh] of buildingMeshes) {
+    if (!bMesh || !bMesh.geometry) continue;
+    g.add(new THREE.Mesh(bMesh.geometry, bMesh.material));
+  }
+  // 地基頂面地板
+  if (foundationFloorsMesh && foundationFloorsMesh.geometry) {
+    g.add(new THREE.Mesh(foundationFloorsMesh.geometry, foundationFloorsMesh.material));
+  }
+  // 紅色 cornice 帶 — 視覺主角
+  if (foundationCornicesMesh && foundationCornicesMesh.geometry) {
+    g.add(new THREE.Mesh(foundationCornicesMesh.geometry, foundationCornicesMesh.material));
+  }
+}
+
+function _animateLiveCornice() {
+  if (!_liveCorniceRunning) return;
+  _liveCorniceRAF = requestAnimationFrame(_animateLiveCornice);
+  const lc = _liveCornice;
+  if (!lc) return;
+  lc.controls.update();
+  lc.renderer.render(lc.scene, lc.camera);
+}
+
+function startLiveCorniceDemo() {
+  _initLiveCorniceDemo();
+  if (!_liveCornice) return;
+  _refreshLiveCorniceMeshes();
+  _attachLiveVisibilityObserver(_liveCornice.container, (visible) => {
+    if (visible) {
+      if (_liveCorniceRunning) return;
+      _liveCorniceRunning = true;
+      _animateLiveCornice();
+    } else {
+      _liveCorniceRunning = false;
+      if (_liveCorniceRAF) { cancelAnimationFrame(_liveCorniceRAF); _liveCorniceRAF = 0; }
+    }
+  });
+}
+
+function stopLiveCorniceDemo() {
+  _liveCorniceRunning = false;
+  if (_liveCorniceRAF) {
+    cancelAnimationFrame(_liveCorniceRAF);
+    _liveCorniceRAF = 0;
+  }
+  _detachLiveVisibilityObserver(_liveCornice?.container);
+}
+
+// 共用：在 #info-screen 內捲動時偵測 demo 是否進入視野
+// 用 WeakMap 紀錄每個 container 的 IO，方便 detach
+const _liveVisibilityIOs = new WeakMap();
+function _attachLiveVisibilityObserver(container, onChange) {
+  if (!container || _liveVisibilityIOs.has(container)) return;
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      // 任何重疊就算 visible，避免完全不 resume
+      onChange(e.isIntersecting);
+    }
+  }, {
+    // root: null 用 viewport，對 fixed scroll container 內的 element 最穩定
+    root: null,
+    threshold: 0,
+    rootMargin: '100px 0px',          // 邊緣 100px 提前 wake up
+  });
+  io.observe(container);
+  _liveVisibilityIOs.set(container, io);
+}
+function _detachLiveVisibilityObserver(container) {
+  if (!container) return;
+  const io = _liveVisibilityIOs.get(container);
+  if (io) {
+    io.disconnect();
+    _liveVisibilityIOs.delete(container);
+  }
+}
+
+// 重拍單張（🔄 按鈕觸發）
+async function reshootOne(shotId, btn) {
+  if (_capturingShots) return;
+  _capturingShots = true;
+  btn?.classList.add('is-shooting');
+  await _withCameraSaved(() => captureShot(shotId));
+  btn?.classList.remove('is-shooting');
+  _capturingShots = false;
+}
+
+// 下載單張 JPEG（💾 按鈕觸發）
+async function downloadShot(shotId) {
+  let img = document.querySelector(`img[data-shot="${shotId}"]`);
+  if (!img || !img.src || !img.src.startsWith('data:')) {
+    // 還沒拍過 → 先拍再下載
+    await reshootOne(shotId);
+    img = document.querySelector(`img[data-shot="${shotId}"]`);
+    if (!img || !img.src.startsWith('data:')) return;
+  }
+  const a = document.createElement('a');
+  a.href = img.src;
+  a.download = `blocktown-${shotId}.jpg`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// 事件委派：[data-reshoot] / [data-download]
+infoScreen.addEventListener('click', (ev) => {
+  const reBtn = ev.target.closest('[data-reshoot]');
+  if (reBtn) {
+    ev.preventDefault();
+    reshootOne(reBtn.getAttribute('data-reshoot'), reBtn);
+    return;
+  }
+  const dlBtn = ev.target.closest('[data-download]');
+  if (dlBtn) {
+    ev.preventDefault();
+    downloadShot(dlBtn.getAttribute('data-download'));
+  }
+});
+
 function openInfo() {
   captureLivePreview();
   infoScreen.classList.remove('hidden');
   infoScreen.setAttribute('aria-hidden', 'false');
   infoScreen.scrollTop = 0;
   document.body.classList.add('info-open');
+  // Live demo：立即啟動，與截圖並行
+  //   原本是「等 captureAllShots 完成才啟動」避免 GPU 撞車，但實測截圖期間
+  //   live demo 也只是另一個 renderer，現代 GPU 同時跑兩個小場景毫無壓力。
+  //   並行的好處：使用者進來就能互動，不必等 15 張截圖跑完
+  startLiveSkyDemo();
+  startLiveWaterDemo();
+  startLiveRailingDemo();
+  startLiveCorniceDemo();
+
+  // 第一次開啟自動拍 15 張（之後重開沿用已拍的，免得每次都卡 1-2 秒）
+  if (!_shotsCaptured) {
+    setTimeout(() => captureAllShots(), 600);
+  }
 }
 function closeInfo() {
   infoScreen.classList.add('hidden');
   infoScreen.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('info-open');
+  // 關掉就停 RAF，省 GPU
+  stopLiveSkyDemo();
+  stopLiveWaterDemo();
+  stopLiveRailingDemo();
+  stopLiveCorniceDemo();
 }
 
 document.getElementById('btn-info').addEventListener('click', openInfo);
@@ -3160,6 +3984,13 @@ const MAX_DT = 0.1;   // 100ms 上限
 
 function animate() {
   requestAnimationFrame(animate);
+
+  // 截圖期間：完全交給 captureShot() 控制 camera 與 render
+  // 不更新 menu orbit / focus lerp / 不重複 render
+  if (_capturingShots) {
+    _lastFrameT = performance.now();   // 避免重啟後 dt 跳大
+    return;
+  }
 
   const _now = performance.now();
   const dt = Math.min(MAX_DT, (_now - _lastFrameT) / 1000);
