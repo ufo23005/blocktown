@@ -485,40 +485,279 @@
       </div>
     </section>
 
-    <!-- 技術堆疊（加外部連結）-->
+    <!-- 技術堆疊：Matrix overview + 分組 Card（WHAT/TECH/WHERE 三段）-->
     <section class="info-section">
       <h2 class="info-h2">技術堆疊</h2>
-      <div class="info-media-wall">
-        <a class="info-media" href="https://threejs.org/docs/" target="_blank" rel="noopener">
-          <h4>THREE.JS 0.160 <span class="info-media__ext">↗</span></h4>
-          <p class="info-media__plain">📦 把 3D 畫面畫到網頁上的工具，就像「網頁版的 Unity」。</p>
-          <p>WebGL、PCF 軟陰影、ACES Filmic Tonemapping、OrbitControls、PerspectiveCamera。</p>
-        </a>
-        <a class="info-media" href="https://github.com/mapbox/delaunator" target="_blank" rel="noopener">
-          <h4>DELAUNATOR 5 <span class="info-media__ext">↗</span></h4>
-          <p class="info-media__plain">📦 把一堆「點」連成不重疊的三角形，地圖學常用。</p>
-          <p>Delaunay 三角剖分演算法。本作改用 square grid + curve distortion + jitter，但保留 utility 給後續實驗。</p>
-        </a>
-        <a class="info-media" href="https://github.com/stevinz/three-subdivide" target="_blank" rel="noopener">
-          <h4>THREE-SUBDIVIDE <span class="info-media__ext">↗</span></h4>
-          <p class="info-media__plain">📦 把硬邊方塊「揉圓」成可愛形狀，像揉麵團。</p>
-          <p>Loop subdivision：每個三角形分成 4 個並 smoothing，把硬邊 block geometry 圓潤成 Townscaper 風 puffy 形狀。</p>
-        </a>
-        <a class="info-media" href="https://www.khronos.org/files/opengles_shading_language.pdf" target="_blank" rel="noopener">
-          <h4>GLSL SHADER <span class="info-media__ext">↗</span></h4>
-          <p class="info-media__plain">📦 寫給顯卡的迷你程式，告訴它每個像素長什麼樣。本作用它畫天空、水、瓦片。</p>
-          <p>六套自訂 shader — 天空 FBM 雲 + 漸層球、徑向漸層水面、動態波紋 + foam 飄移雜訊、水線交界 highlight、屋頂瓦片圓點、牆面水平木紋。</p>
-        </a>
-        <a class="info-media" href="https://threejs.org/docs/#examples/en/postprocessing/EffectComposer" target="_blank" rel="noopener">
-          <h4>POST-PROCESSING <span class="info-media__ext">↗</span></h4>
-          <p class="info-media__plain">📦 畫完場景後再加一層濾鏡，就像 IG 修圖。本作加了微暖暈光。</p>
-          <p>EffectComposer + UnrealBloomPass：strength 0.35 / threshold 0.85 微暈光，增加溫暖夢幻感。</p>
-        </a>
-        <a class="info-media" href="https://developer.mozilla.org/docs/Web/HTML/Element/script/type/importmap" target="_blank" rel="noopener">
-          <h4>ES MODULE + IMPORT MAP <span class="info-media__ext">↗</span></h4>
-          <p class="info-media__plain">📦 不用打包工具，瀏覽器自己處理 JS 模組。打開 HTML 就能跑。</p>
-          <p>零 build：純原生 ES Module 從 CDN 載入，靜態 server 就能跑，無 webpack / vite。</p>
-        </a>
+
+      <!-- (A) Matrix overview：套件/規格 → 技術點 → 用在哪 file:line -->
+      <p class="stack-matrix-hint">先看一張表掌握全貌，再往下看每張卡的細節 ↓</p>
+      <div class="stack-matrix-wrap">
+        <table class="stack-matrix">
+          <thead>
+            <tr>
+              <th scope="col">套件 / 規格</th>
+              <th scope="col">技術點</th>
+              <th scope="col">用在哪　<small>(點擊跳到 GitHub 程式碼)</small></th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Three.js：跨越 5 列 -->
+            <tr>
+              <th scope="rowgroup" rowspan="5" class="stack-matrix__pkg"><span class="stack-matrix__icon">📦</span> Three.js 0.160</th>
+              <td>WebGLRenderer · ACES Filmic Tonemapping</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L158" target="_blank" rel="noopener">main.js:158</a> 渲染器初始化、PixelRatio、PCF 軟陰影</td>
+            </tr>
+            <tr>
+              <td>OrbitControls</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L188" target="_blank" rel="noopener">main.js:188</a> 滑鼠拖曳/縮放/平移視角</td>
+            </tr>
+            <tr>
+              <td>DirectionalLight + PCF Soft Shadow</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L232" target="_blank" rel="noopener">main.js:232</a> 太陽光、2048² shadow map、手動 needsUpdate</td>
+            </tr>
+            <tr>
+              <td>Raycaster</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2607" target="_blank" rel="noopener">main.js:2607</a> <code>pick()</code> 滑鼠射線命中 cell / 屋頂 / 牆面</td>
+            </tr>
+            <tr>
+              <td>Scene.fog · Hemisphere/Ambient Light</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L67" target="_blank" rel="noopener">main.js:67</a> 海面深霧；<a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L229" target="_blank" rel="noopener">main.js:229</a> 環境光底色</td>
+            </tr>
+
+            <!-- three-subdivide -->
+            <tr>
+              <th scope="row" class="stack-matrix__pkg"><span class="stack-matrix__icon">📦</span> three-subdivide</th>
+              <td>Loop Subdivision + mergeVertices</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2065" target="_blank" rel="noopener">main.js:2065</a> <code>rebuildBuildingMesh()</code> 揉圓建築幾何</td>
+            </tr>
+
+            <!-- Delaunator -->
+            <tr>
+              <th scope="row" class="stack-matrix__pkg"><span class="stack-matrix__icon">📦</span> Delaunator 5</th>
+              <td>Delaunay 三角剖分（保留 utility）</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L7" target="_blank" rel="noopener">main.js:7</a> import；目前 grid 改用 square + curve distortion，剖分 lib 暫不啟用</td>
+            </tr>
+
+            <!-- GLSL：跨越 4 列 -->
+            <tr>
+              <th scope="rowgroup" rowspan="4" class="stack-matrix__pkg"><span class="stack-matrix__icon">🛠</span> GLSL Shader</th>
+              <td>FBM 雜訊 + 漸層球（vertex/fragment）</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L71" target="_blank" rel="noopener">main.js:71</a> <code>setupSkyDome()</code> 天空雲飄移</td>
+            </tr>
+            <tr>
+              <td>徑向漸層 ShaderMaterial</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L258" target="_blank" rel="noopener">main.js:258</a> 水面深淺漸層</td>
+            </tr>
+            <tr>
+              <td>uniform uTime 動態波紋 + foam</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1646" target="_blank" rel="noopener">main.js:1646</a> <code>buildWaterFoam()</code> 地基外圍光暈</td>
+            </tr>
+            <tr>
+              <td>onBeforeCompile 注入：瓦片圓點 / 木紋</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1929" target="_blank" rel="noopener">main.js:1929</a> <code>injectBlockShader()</code> 屋頂與牆面程序材質</td>
+            </tr>
+
+            <!-- Post-FX -->
+            <tr>
+              <th scope="row" class="stack-matrix__pkg"><span class="stack-matrix__icon">🛠</span> Post-Processing</th>
+              <td>EffectComposer + UnrealBloomPass + OutputPass</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L170" target="_blank" rel="noopener">main.js:170</a> 微暈光（strength 0.35 / threshold 0.85）</td>
+            </tr>
+
+            <!-- ES Module + Import Map -->
+            <tr>
+              <th scope="row" class="stack-matrix__pkg"><span class="stack-matrix__icon">🛠</span> ES Module + Import Map</th>
+              <td>裸模組名 → CDN URL 解析（無 build）</td>
+              <td><a href="https://github.com/ufo23005/blocktown/blob/main/index.html#L802" target="_blank" rel="noopener">index.html:802</a> <code>&lt;script type="importmap"&gt;</code> 映射三方 lib</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- (B) 📦 相依套件 group：真正 npm/CDN 安裝得到的 lib -->
+      <div class="stack-group">
+        <h3 class="stack-group__title"><span class="stack-group__badge">📦</span> 相依套件 <small>· 透過 Import Map 從 CDN 載入</small></h3>
+        <div class="stack-cards">
+
+          <article class="stack-card" data-tone="orange">
+            <header>
+              <h4>THREE.JS <span class="stack-card__ver">v0.160</span></h4>
+              <a class="stack-card__link" href="https://threejs.org/docs/" target="_blank" rel="noopener">DOCS ↗</a>
+            </header>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHAT · 是什麼</span>
+              <p>把 3D 畫面畫到網頁上的工具，就像「網頁版的 Unity」。本作所有渲染、光照、相機、互動都靠它。</p>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">TECH · 用到的技術</span>
+              <div class="chip-row">
+                <span class="chip">WebGL Renderer</span>
+                <span class="chip">PerspectiveCamera</span>
+                <span class="chip">OrbitControls</span>
+                <span class="chip">PCF Soft Shadow</span>
+                <span class="chip">ACES Filmic</span>
+                <span class="chip">Raycaster</span>
+                <span class="chip">Hemisphere / Ambient / Directional Light</span>
+                <span class="chip">Fog</span>
+                <span class="chip">ShaderMaterial</span>
+              </div>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHERE · 用在哪</span>
+              <ul class="where-list">
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L158" target="_blank" rel="noopener"><code>main.js:158</code></a> Renderer + ACES tone mapping + PCF 軟陰影</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L188" target="_blank" rel="noopener"><code>main.js:188</code></a> OrbitControls 視角操作</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L232" target="_blank" rel="noopener"><code>main.js:232</code></a> 太陽光 + 陰影投射範圍</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2607" target="_blank" rel="noopener"><code>main.js:2607</code></a> <code>pick()</code> 滑鼠射線拾取</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="stack-card" data-tone="cream">
+            <header>
+              <h4>THREE-SUBDIVIDE <span class="stack-card__ver">v1.1.5</span></h4>
+              <a class="stack-card__link" href="https://github.com/stevinz/three-subdivide" target="_blank" rel="noopener">GITHUB ↗</a>
+            </header>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHAT · 是什麼</span>
+              <p>把硬邊方塊「揉圓」成可愛 puffy 形狀，像揉麵團。一行 API 就能把銳角全磨成弧線，是 Townscaper 視覺的關鍵。</p>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">TECH · 用到的技術</span>
+              <div class="chip-row">
+                <span class="chip">Loop Subdivision</span>
+                <span class="chip">mergeVertices（去重）</span>
+                <span class="chip">頂點色烘焙保留</span>
+                <span class="chip">iterations × split × averageOnly</span>
+              </div>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHERE · 用在哪</span>
+              <ul class="where-list">
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L2065" target="_blank" rel="noopener"><code>main.js:2065</code></a> <code>rebuildBuildingMesh()</code> 合併 mesh 後揉圓</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L8" target="_blank" rel="noopener"><code>main.js:8-9</code></a> import LoopSubdivision、mergeVertices</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="stack-card" data-tone="red">
+            <header>
+              <h4>DELAUNATOR <span class="stack-card__ver">v5</span></h4>
+              <a class="stack-card__link" href="https://github.com/mapbox/delaunator" target="_blank" rel="noopener">GITHUB ↗</a>
+            </header>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHAT · 是什麼</span>
+              <p>把一堆「點」連成不重疊的三角形，地圖學常用的演算法 lib。Mapbox 出品、超快。</p>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">TECH · 用到的技術</span>
+              <div class="chip-row">
+                <span class="chip">Delaunay 三角剖分</span>
+                <span class="chip">凸包鄰接</span>
+              </div>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHERE · 用在哪</span>
+              <ul class="where-list">
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L7" target="_blank" rel="noopener"><code>main.js:7</code></a> import 保留</li>
+                <li><em>目前未啟用</em>：地形改用 square grid + curve distortion，剖分 lib 留作後續實驗（如改回 Voronoi）。</li>
+              </ul>
+            </div>
+          </article>
+
+        </div>
+      </div>
+
+      <!-- (C) 🛠 規格與技術 group：瀏覽器/GPU 規格本身，不是「下載得到的 lib」 -->
+      <div class="stack-group">
+        <h3 class="stack-group__title"><span class="stack-group__badge">🛠</span> 規格與技術 <small>· 瀏覽器/GPU 原生支援，無需安裝</small></h3>
+        <div class="stack-cards">
+
+          <article class="stack-card" data-tone="cream">
+            <header>
+              <h4>GLSL SHADER</h4>
+              <a class="stack-card__link" href="https://www.khronos.org/files/opengles_shading_language.pdf" target="_blank" rel="noopener">SPEC ↗</a>
+            </header>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHAT · 是什麼</span>
+              <p>寫給 GPU 的迷你程式，告訴它每個像素長什麼樣。瀏覽器透過 WebGL 編譯執行，本作用它畫天空、水、瓦片、木紋。</p>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">TECH · 用到的技術</span>
+              <div class="chip-row">
+                <span class="chip">vertex / fragment shader</span>
+                <span class="chip">FBM 4 階雜訊</span>
+                <span class="chip">smoothstep / mix</span>
+                <span class="chip">uniform uTime 時間驅動</span>
+                <span class="chip">onBeforeCompile 注入</span>
+                <span class="chip">world-space derivatives</span>
+                <span class="chip">vertex color AO 烘焙</span>
+              </div>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHERE · 用在哪（6 套 shader）</span>
+              <ul class="where-list">
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L71" target="_blank" rel="noopener"><code>main.js:71</code></a> <code>setupSkyDome()</code> 天空漸層 + FBM 雲飄移</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L258" target="_blank" rel="noopener"><code>main.js:258</code></a> 水面徑向漸層（中央深、邊緣淺）</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1646" target="_blank" rel="noopener"><code>main.js:1646</code></a> <code>buildWaterFoam()</code> 動態波紋 + foam</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1929" target="_blank" rel="noopener"><code>main.js:1929</code></a> <code>injectBlockShader()</code> 屋頂瓦片圓點 + 牆面木紋</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="stack-card" data-tone="orange">
+            <header>
+              <h4>POST-PROCESSING</h4>
+              <a class="stack-card__link" href="https://threejs.org/docs/#examples/en/postprocessing/EffectComposer" target="_blank" rel="noopener">DOCS ↗</a>
+            </header>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHAT · 是什麼</span>
+              <p>畫完場景後再加一層「濾鏡」，就像 IG 修圖。本作只加了微弱的暈光，讓屋頂高光和天空變得溫暖夢幻。</p>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">TECH · 用到的技術</span>
+              <div class="chip-row">
+                <span class="chip">EffectComposer</span>
+                <span class="chip">RenderPass</span>
+                <span class="chip">UnrealBloomPass</span>
+                <span class="chip">OutputPass</span>
+              </div>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHERE · 用在哪</span>
+              <ul class="where-list">
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L170" target="_blank" rel="noopener"><code>main.js:170-183</code></a> composer 流水線設定：strength 0.35 · radius 0.6 · threshold 0.85（只挑亮部）</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="stack-card" data-tone="red">
+            <header>
+              <h4>ES MODULE + IMPORT MAP</h4>
+              <a class="stack-card__link" href="https://developer.mozilla.org/docs/Web/HTML/Element/script/type/importmap" target="_blank" rel="noopener">MDN ↗</a>
+            </header>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHAT · 是什麼</span>
+              <p>不用 webpack / vite 打包工具，瀏覽器自己處理 JS 模組與裸名稱解析。打開 HTML 就能跑、零 build 步驟。</p>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">TECH · 用到的技術</span>
+              <div class="chip-row">
+                <span class="chip">&lt;script type="module"&gt;</span>
+                <span class="chip">&lt;script type="importmap"&gt;</span>
+                <span class="chip">unpkg / esm.sh CDN</span>
+              </div>
+            </div>
+            <div class="stack-card__row">
+              <span class="stack-card__lbl">WHERE · 用在哪</span>
+              <ul class="where-list">
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/index.html#L802" target="_blank" rel="noopener"><code>index.html:802</code></a> importmap：three / three/addons/ / delaunator / three-subdivide → CDN URL</li>
+                <li><a href="https://github.com/ufo23005/blocktown/blob/main/main.js#L1" target="_blank" rel="noopener"><code>main.js:1-9</code></a> 裸名稱 import（<code>import * as THREE from 'three'</code>）</li>
+              </ul>
+            </div>
+          </article>
+
+        </div>
       </div>
       <!-- 試試看 demo CTA：報告中講完技術直接切到 demo -->
       <div class="info-try-wrap">

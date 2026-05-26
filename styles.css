@@ -722,6 +722,298 @@
     font-family: inherit;
   }
 
+  /* === 技術堆疊 v2：Matrix overview + 分組 Card === */
+
+  /* hint 一行 */
+  .stack-matrix-hint {
+    margin: 0 0 10px;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: rgba(244, 236, 216, 0.55);
+    text-transform: uppercase;
+  }
+
+  /* (A) Matrix overview 表格 */
+  .stack-matrix-wrap {
+    margin-bottom: 36px;
+    overflow-x: auto;
+    border: 1px solid rgba(244, 236, 216, 0.10);
+    border-radius: 10px;
+    background: rgba(244, 236, 216, 0.02);
+  }
+  .stack-matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: inherit;
+  }
+  .stack-matrix th,
+  .stack-matrix td {
+    padding: 10px 14px;
+    text-align: left;
+    vertical-align: middle;
+    border-bottom: 1px solid rgba(244, 236, 216, 0.06);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .stack-matrix thead th {
+    font-size: 10px;
+    letter-spacing: 0.34em;
+    color: rgba(232, 156, 90, 0.9);
+    background: rgba(232, 156, 90, 0.04);
+    border-bottom: 1px solid rgba(232, 156, 90, 0.22);
+    font-weight: 600;
+  }
+  .stack-matrix thead small {
+    font-weight: normal;
+    letter-spacing: 0.08em;
+    color: rgba(244, 236, 216, 0.45);
+    text-transform: none;
+  }
+  .stack-matrix tbody tr:last-child th,
+  .stack-matrix tbody tr:last-child td {
+    border-bottom: none;
+  }
+  .stack-matrix__pkg {
+    width: 22%;
+    color: #f7c878;
+    background: rgba(232, 156, 90, 0.04);
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    border-right: 1px solid rgba(244, 236, 216, 0.08);
+  }
+  .stack-matrix__icon {
+    display: inline-block;
+    margin-right: 4px;
+    font-size: 13px;
+  }
+  .stack-matrix tbody td {
+    color: rgba(244, 236, 216, 0.78);
+  }
+  .stack-matrix tbody td:first-of-type {
+    color: rgba(244, 236, 216, 0.92);
+    font-weight: 500;
+  }
+  .stack-matrix a {
+    color: #f7c878;
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(247, 200, 120, 0.4);
+    transition: color 0.18s, border-color 0.18s;
+  }
+  .stack-matrix a:hover {
+    color: #fff5dc;
+    border-bottom-color: #fff5dc;
+  }
+  .stack-matrix code {
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: rgba(255, 245, 220, 0.88);
+    background: rgba(232, 156, 90, 0.10);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* (B) Group：📦 相依套件 / 🛠 規格與技術 */
+  .stack-group {
+    margin: 0 0 28px;
+  }
+  .stack-group__title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.28em;
+    color: rgba(244, 236, 216, 0.90);
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed rgba(244, 236, 216, 0.14);
+  }
+  .stack-group__title small {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: rgba(244, 236, 216, 0.45);
+    font-weight: normal;
+  }
+  .stack-group__badge {
+    font-size: 18px;
+    letter-spacing: 0;
+  }
+
+  /* (C) Card：每張卡 WHAT / TECH / WHERE 三段 */
+  .stack-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  .stack-card {
+    padding: 16px 18px;
+    background: rgba(244, 236, 216, 0.028);
+    border: 1px solid rgba(244, 236, 216, 0.08);
+    border-radius: 10px;
+    border-left: 3px solid #e08070;
+    transition: background 0.2s, border-left-color 0.25s, transform 0.2s;
+  }
+  .stack-card:hover {
+    background: rgba(244, 236, 216, 0.06);
+    transform: translateY(-2px);
+  }
+  .stack-card[data-tone="cream"] { border-left-color: #f0d8b0; }
+  .stack-card[data-tone="orange"] { border-left-color: #eaa860; }
+  .stack-card[data-tone="red"] { border-left-color: #e08070; }
+  .stack-card[data-tone="cream"]:hover { border-left-color: #fff5dc; }
+  .stack-card[data-tone="orange"]:hover { border-left-color: #f7c878; }
+  .stack-card[data-tone="red"]:hover { border-left-color: #ff9080; }
+
+  .stack-card header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed rgba(244, 236, 216, 0.12);
+  }
+  .stack-card h4 {
+    margin: 0;
+    font-family: inherit;
+    font-size: 13px;
+    letter-spacing: 0.20em;
+    color: #f7c878;
+    font-weight: 700;
+  }
+  .stack-card__ver {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: rgba(244, 236, 216, 0.55);
+    margin-left: 6px;
+    font-weight: normal;
+  }
+  .stack-card__link {
+    font-size: 9.5px;
+    letter-spacing: 0.26em;
+    color: #f7c878;
+    text-decoration: none;
+    border: 1px solid rgba(247, 200, 120, 0.35);
+    padding: 3px 9px;
+    border-radius: 4px;
+    transition: background 0.18s, color 0.18s, border-color 0.18s;
+    white-space: nowrap;
+  }
+  .stack-card__link:hover {
+    background: #f7c878;
+    color: #1d1610;
+    border-color: #f7c878;
+  }
+
+  .stack-card__row {
+    margin-bottom: 14px;
+  }
+  .stack-card__row:last-child {
+    margin-bottom: 0;
+  }
+  .stack-card__lbl {
+    display: block;
+    font-size: 9.5px;
+    letter-spacing: 0.42em;
+    color: rgba(232, 156, 90, 0.85);
+    margin-bottom: 7px;
+    font-weight: 600;
+  }
+  .stack-card__row p {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: rgba(244, 236, 216, 0.78);
+    font-family: inherit;
+  }
+
+  /* TECH chip 列 */
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .chip {
+    display: inline-block;
+    padding: 3px 9px;
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    color: rgba(244, 236, 216, 0.85);
+    background: rgba(232, 156, 90, 0.10);
+    border: 1px solid rgba(232, 156, 90, 0.28);
+    border-radius: 999px;
+    font-family: inherit;
+    white-space: nowrap;
+  }
+
+  /* WHERE 條列 */
+  .where-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .where-list li {
+    font-size: 12px;
+    line-height: 1.75;
+    color: rgba(244, 236, 216, 0.78);
+    padding-left: 14px;
+    position: relative;
+    margin-bottom: 3px;
+  }
+  .where-list li:last-child {
+    margin-bottom: 0;
+  }
+  .where-list li::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: rgba(232, 156, 90, 0.7);
+    font-size: 10px;
+  }
+  .where-list a {
+    color: #f7c878;
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(247, 200, 120, 0.4);
+    transition: color 0.18s, border-color 0.18s;
+  }
+  .where-list a:hover {
+    color: #fff5dc;
+    border-bottom-color: #fff5dc;
+  }
+  .where-list code {
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: rgba(255, 245, 220, 0.88);
+    background: rgba(232, 156, 90, 0.10);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border-bottom: none;
+  }
+  .where-list em {
+    color: rgba(244, 236, 216, 0.55);
+    font-style: italic;
+  }
+
+  /* RWD：手機把 matrix 改成 stack（左欄保持但縮短）*/
+  @media (max-width: 720px) {
+    .stack-matrix th,
+    .stack-matrix td {
+      padding: 8px 10px;
+      font-size: 11px;
+    }
+    .stack-matrix__pkg {
+      width: 30%;
+      font-size: 11px;
+    }
+    .stack-cards {
+      grid-template-columns: 1fr;
+    }
+  }
+
   /* === Marquee 跑馬燈 === */
   .info-marquee {
     position: relative;
